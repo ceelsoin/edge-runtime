@@ -1,0 +1,110 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/runtime-core",
+  "crates/server",
+  "crates/functions",
+  "crates/cli",
+]
+
+[workspace.package]
+authors = ["Globo <team@globo.com>"]
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+# --- local crates ---
+runtime-core = { version = "0.1.0", path = "./crates/runtime-core" }
+edge-server = { version = "0.1.0", path = "./crates/server" }
+functions = { version = "0.1.0", path = "./crates/functions" }
+
+# --- deno ecosystem ---
+deno_core = "0.324.0"
+deno_ast = { version = "=0.44.0", features = ["transpiling"] }
+deno_console = "0.182.0"
+deno_url = "0.182.0"
+deno_web = "0.213.0"
+deno_webidl = "0.182.0"
+deno_webgpu = { version = "0.203.0" }
+deno_fetch = "0.206.0"
+deno_crypto = "0.196.0"
+deno_node = { version = "0.174.0" }
+deno_node_crypto = { version = "0.6.0" }
+deno_net = "0.174.0"
+deno_tls = "0.169.0"
+deno_http = "0.180.0"
+deno_io = "0.92.0"
+deno_permissions = "0.42.0"
+deno_telemetry = "0.4.0"
+
+# --- module graph ---
+deno_graph = "0.86.3"
+
+# --- eszip ---
+eszip = "=0.80.0"
+
+# --- HTTP stack ---
+hyper = { version = "1.4.1", features = ["full"] }
+hyper-util = { version = "=0.1.7", features = ["tokio", "server", "server-auto", "server-graceful"] }
+http = "1.0"
+http-body = "1.0"
+http-body-util = "0.1.2"
+
+# --- tower middleware ---
+tower = { version = "0.4.13", default-features = false, features = ["util", "timeout", "limit", "load-shed"] }
+tower-http = { version = "0.6.1", features = ["trace", "cors", "compression-gzip"] }
+tower-service = "0.3.2"
+
+# --- async runtime ---
+tokio = { version = "1.36.0", features = ["full"] }
+tokio-util = { version = "0.7.4", features = ["rt"] }
+
+# --- TLS ---
+rustls = { version = "0.23.11", default-features = false, features = ["logging", "std", "tls12", "ring"] }
+rustls-pemfile = "2"
+tokio-rustls = { version = "0.26.0", default-features = false, features = ["ring", "tls12"] }
+
+# --- observability ---
+opentelemetry = "0.27.0"
+opentelemetry-otlp = { version = "0.27.0", features = ["logs", "http-proto"] }
+opentelemetry_sdk = "0.27.0"
+opentelemetry-semantic-conventions = { version = "0.27.0", features = ["semconv_experimental"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "tracing-log"] }
+tracing-opentelemetry = "0.28"
+
+# --- concurrency ---
+dashmap = "5.5.3"
+
+# --- serialization ---
+serde = { version = "1.0.149", features = ["derive"] }
+serde_json = "1.0.85"
+
+# --- error handling ---
+anyhow = "1.0.57"
+thiserror = "2.0.3"
+
+# --- CLI ---
+clap = { version = "4.5.16", features = ["cargo", "derive", "env", "string"] }
+
+# --- utilities ---
+bytes = "1.11.1"
+futures-util = "0.3.30"
+uuid = { version = "1.3.0", features = ["v4"] }
+url = { version = "2.5", features = ["serde"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
+once_cell = "1.17.1"
+pin-project = "1.0.11"
+async-trait = "0.1.73"
+libc = "0.2.126"
+log = "0.4.20"
+ctor = "0.2.6"
+
+[patch.crates-io]
+deno_core = { git = "https://github.com/supabase/deno_core", branch = "324-supabase" }
+eszip = { git = "https://github.com/supabase/eszip", branch = "fix-pub-vis-0-80-1" }
+v8 = { git = "https://github.com/supabase/rusty_v8", tag = "v130.0.7" }
+
+[profile.release]
+debug = true
+lto = "thin"

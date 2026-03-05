@@ -1,0 +1,43 @@
+[package]
+name = "runtime-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+deno_core.workspace = true
+deno_console.workspace = true
+deno_url.workspace = true
+deno_web.workspace = true
+deno_webidl.workspace = true
+deno_fetch.workspace = true
+deno_crypto.workspace = true
+deno_net.workspace = true
+deno_tls.workspace = true
+deno_io.workspace = true
+deno_permissions.workspace = true
+deno_telemetry.workspace = true
+deno_ast.workspace = true
+
+eszip.workspace = true
+
+http.workspace = true
+
+anyhow.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+once_cell.workspace = true
+url.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
+uuid.workspace = true
+libc.workspace = true
+log.workspace = true
+ctor.workspace = true
+
+[dev-dependencies]
+deno_graph.workspace = true

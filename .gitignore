@@ -1,0 +1,4 @@
+**/*.eszip
+**/**/*.eszip
+*.eszip
+target/

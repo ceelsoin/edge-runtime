@@ -1,0 +1,210 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+use bytes::Bytes;
+use chrono::{DateTime, Utc};
+use runtime_core::isolate::{IsolateConfig, IsolateHandle};
+use serde::{Deserialize, Serialize};
+
+/// Status of a deployed function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FunctionStatus {
+    /// Function is being loaded (eszip parsed, isolate booting).
+    Loading,
+    /// Function is running and ready to handle requests.
+    Running,
+    /// Function encountered an error during boot or at runtime.
+    Error,
+    /// Function is shutting down (being removed or reloaded).
+    ShuttingDown,
+}
+
+/// Per-function request/response metrics.
+#[derive(Debug)]
+pub struct FunctionMetrics {
+    pub total_requests: AtomicU64,
+    pub active_requests: AtomicU64,
+    pub total_errors: AtomicU64,
+    pub total_cpu_time_ms: AtomicU64,
+}
+
+impl Default for FunctionMetrics {
+    fn default() -> Self {
+        Self {
+            total_requests: AtomicU64::new(0),
+            active_requests: AtomicU64::new(0),
+            total_errors: AtomicU64::new(0),
+            total_cpu_time_ms: AtomicU64::new(0),
+        }
+    }
+}
+
+impl FunctionMetrics {
+    pub fn snapshot(&self) -> FunctionMetricsSnapshot {
+        FunctionMetricsSnapshot {
+            total_requests: self.total_requests.load(Ordering::Relaxed),
+            active_requests: self.active_requests.load(Ordering::Relaxed),
+            total_errors: self.total_errors.load(Ordering::Relaxed),
+            total_cpu_time_ms: self.total_cpu_time_ms.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// Serializable snapshot of function metrics.
+#[derive(Debug, Clone, Serialize)]
+pub struct FunctionMetricsSnapshot {
+    pub total_requests: u64,
+    pub active_requests: u64,
+    pub total_errors: u64,
+    pub total_cpu_time_ms: u64,
+}
+
+/// A single deployed function entry.
+pub struct FunctionEntry {
+    /// Unique name (used as path prefix for routing).
+    pub name: String,
+    /// The raw eszip bundle bytes (kept for hot-reload).
+    pub eszip_bytes: Bytes,
+    /// Handle to the running isolate (None if loading/error).
+    pub isolate_handle: Option<IsolateHandle>,
+    /// Current status.
+    pub status: FunctionStatus,
+    /// Runtime configuration.
+    pub config: IsolateConfig,
+    /// Metrics.
+    pub metrics: Arc<FunctionMetrics>,
+    /// When the function was deployed.
+    pub created_at: DateTime<Utc>,
+    /// When it was last updated.
+    pub updated_at: DateTime<Utc>,
+    /// Last error message (if status == Error).
+    pub last_error: Option<String>,
+}
+
+impl FunctionEntry {
+    /// Create a serializable info response from this entry.
+    pub fn to_info(&self) -> FunctionInfo {
+        FunctionInfo {
+            name: self.name.clone(),
+            status: self.status,
+            metrics: self.metrics.snapshot(),
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            last_error: self.last_error.clone(),
+        }
+    }
+}
+
+/// API response for function info.
+#[derive(Debug, Serialize)]
+pub struct FunctionInfo {
+    pub name: String,
+    pub status: FunctionStatus,
+    pub metrics: FunctionMetricsSnapshot,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub last_error: Option<String>,
+}
+
+/// API payload for deploying a function.
+#[derive(Debug, Deserialize)]
+pub struct DeployRequest {
+    pub name: String,
+    #[serde(default)]
+    pub config: IsolateConfig,
+    /// The eszip bytes (set from multipart body, not from JSON).
+    #[serde(skip)]
+    pub eszip_bytes: Bytes,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn function_status_serde_round_trip() {
+        let statuses = vec![
+            FunctionStatus::Loading,
+            FunctionStatus::Running,
+            FunctionStatus::Error,
+            FunctionStatus::ShuttingDown,
+        ];
+        for status in statuses {
+            let json = serde_json::to_string(&status).unwrap();
+            let deserialized: FunctionStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(status, deserialized);
+        }
+    }
+
+    #[test]
+    fn function_status_snake_case() {
+        assert_eq!(serde_json::to_string(&FunctionStatus::Loading).unwrap(), "\"loading\"");
+        assert_eq!(serde_json::to_string(&FunctionStatus::Running).unwrap(), "\"running\"");
+        assert_eq!(serde_json::to_string(&FunctionStatus::Error).unwrap(), "\"error\"");
+        assert_eq!(serde_json::to_string(&FunctionStatus::ShuttingDown).unwrap(), "\"shutting_down\"");
+    }
+
+    #[test]
+    fn function_metrics_default_zeros() {
+        let m = FunctionMetrics::default();
+        assert_eq!(m.total_requests.load(Ordering::Relaxed), 0);
+        assert_eq!(m.active_requests.load(Ordering::Relaxed), 0);
+        assert_eq!(m.total_errors.load(Ordering::Relaxed), 0);
+        assert_eq!(m.total_cpu_time_ms.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn function_metrics_atomic_counters() {
+        let m = FunctionMetrics::default();
+        m.total_requests.fetch_add(5, Ordering::Relaxed);
+        m.active_requests.fetch_add(2, Ordering::Relaxed);
+        m.total_errors.fetch_add(1, Ordering::Relaxed);
+        m.total_cpu_time_ms.fetch_add(100, Ordering::Relaxed);
+        let snap = m.snapshot();
+        assert_eq!(snap.total_requests, 5);
+        assert_eq!(snap.active_requests, 2);
+        assert_eq!(snap.total_errors, 1);
+        assert_eq!(snap.total_cpu_time_ms, 100);
+    }
+
+    #[test]
+    fn function_metrics_snapshot_serializes() {
+        let m = FunctionMetrics::default();
+        m.total_requests.fetch_add(10, Ordering::Relaxed);
+        let snap = m.snapshot();
+        let json = serde_json::to_string(&snap).unwrap();
+        assert!(json.contains("\"total_requests\":10"));
+    }
+
+    #[test]
+    fn function_entry_to_info() {
+        let metrics = Arc::new(FunctionMetrics::default());
+        metrics.total_requests.fetch_add(3, Ordering::Relaxed);
+        let now = Utc::now();
+        let entry = FunctionEntry {
+            name: "test-fn".to_string(),
+            eszip_bytes: Bytes::new(),
+            isolate_handle: None,
+            status: FunctionStatus::Running,
+            config: IsolateConfig::default(),
+            metrics,
+            created_at: now,
+            updated_at: now,
+            last_error: None,
+        };
+        let info = entry.to_info();
+        assert_eq!(info.name, "test-fn");
+        assert_eq!(info.status, FunctionStatus::Running);
+        assert_eq!(info.metrics.total_requests, 3);
+        assert!(info.last_error.is_none());
+    }
+
+    #[test]
+    fn deploy_request_deserialization() {
+        let json = r#"{"name":"my-func"}"#;
+        let req: DeployRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.name, "my-func");
+        assert!(req.eszip_bytes.is_empty());
+    }
+}

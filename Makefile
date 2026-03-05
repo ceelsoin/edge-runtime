@@ -1,0 +1,2 @@
+build:
+	RUSTY_V8_MIRROR="https://github.com/supabase/rusty_v8/releases/download" cargo build 2>&1

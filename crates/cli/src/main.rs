@@ -1,0 +1,51 @@
+mod commands;
+
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(
+    name = "deno-edge-runtime",
+    version,
+    about = "Deno-based edge function runtime"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+
+    /// Enable verbose logging (RUST_LOG=debug)
+    #[arg(short, long, global = true)]
+    verbose: bool,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Start the edge runtime server
+    Start(commands::start::StartArgs),
+    /// Bundle a TypeScript/JavaScript file into an eszip
+    Bundle(commands::bundle::BundleArgs),
+}
+
+fn main() -> Result<(), anyhow::Error> {
+    let cli = Cli::parse();
+
+    // Initialize tracing
+    let env_filter = if cli.verbose {
+        "debug"
+    } else {
+        "info"
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(env_filter)),
+        )
+        .init();
+
+    // Initialize V8 platform (must be done on main thread, before any JsRuntime)
+    deno_core::JsRuntime::init_platform(None, false);
+
+    match cli.command {
+        Commands::Start(args) => commands::start::run(args),
+        Commands::Bundle(args) => commands::bundle::run(args),
+    }
+}

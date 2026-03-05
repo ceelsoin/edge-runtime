@@ -1,0 +1,32 @@
+[package]
+name = "functions"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+runtime-core.workspace = true
+deno_core.workspace = true
+eszip.workspace = true
+http.workspace = true
+
+dashmap.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+bytes.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+futures-util.workspace = true
+url.workspace = true
+
+[features]
+hot-reload = []
+
+[dev-dependencies]
+deno_graph.workspace = true
+deno_ast.workspace = true

@@ -1,0 +1,144 @@
+use anyhow::Error;
+use deno_core::ModuleSpecifier;
+use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+
+/// Configuration for creating a new function isolate.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct IsolateConfig {
+    /// Maximum heap size in bytes (0 = unlimited).
+    #[serde(default = "default_max_heap")]
+    pub max_heap_size_bytes: usize,
+
+    /// CPU time limit per request in milliseconds (0 = unlimited).
+    #[serde(default = "default_cpu_time")]
+    pub cpu_time_limit_ms: u64,
+
+    /// Wall clock timeout per request in milliseconds (0 = unlimited).
+    #[serde(default = "default_wall_clock")]
+    pub wall_clock_timeout_ms: u64,
+}
+
+fn default_max_heap() -> usize {
+    128 * 1024 * 1024 // 128 MiB
+}
+
+fn default_cpu_time() -> u64 {
+    50_000
+}
+
+fn default_wall_clock() -> u64 {
+    60_000
+}
+
+impl Default for IsolateConfig {
+    fn default() -> Self {
+        Self {
+            max_heap_size_bytes: default_max_heap(),
+            cpu_time_limit_ms: default_cpu_time(),
+            wall_clock_timeout_ms: default_wall_clock(),
+        }
+    }
+}
+
+/// A request message sent to an isolate for processing.
+pub struct IsolateRequest {
+    /// The HTTP request to process.
+    pub request: http::Request<bytes::Bytes>,
+    /// Channel to send the response back on.
+    pub response_tx: oneshot::Sender<Result<http::Response<bytes::Bytes>, Error>>,
+}
+
+/// Handle to communicate with a running isolate.
+#[derive(Clone)]
+pub struct IsolateHandle {
+    /// Send requests to the isolate's event loop.
+    pub request_tx: mpsc::UnboundedSender<IsolateRequest>,
+    /// Signal the isolate to shut down.
+    pub shutdown: CancellationToken,
+    /// Unique ID for this isolate instance.
+    pub id: Uuid,
+}
+
+impl IsolateHandle {
+    /// Send a request and await the response.
+    pub async fn send_request(
+        &self,
+        request: http::Request<bytes::Bytes>,
+    ) -> Result<http::Response<bytes::Bytes>, Error> {
+        let (response_tx, response_rx) = oneshot::channel();
+
+        self.request_tx
+            .send(IsolateRequest {
+                request,
+                response_tx,
+            })
+            .map_err(|_| anyhow::anyhow!("isolate request channel closed"))?;
+
+        response_rx.await?
+    }
+}
+
+/// Module specifier for the function's entrypoint.
+pub fn default_entrypoint() -> ModuleSpecifier {
+    ModuleSpecifier::parse("file:///src/index.ts").unwrap()
+}
+
+/// Determine the root specifier from an eszip bundle.
+///
+/// Convention: use the first specifier found, or fall back to `file:///src/index.ts`.
+pub fn determine_root_specifier(eszip: &eszip::EszipV2) -> Result<ModuleSpecifier, Error> {
+    let specifiers = eszip.specifiers();
+    if let Some(first) = specifiers.first() {
+        ModuleSpecifier::parse(first)
+            .map_err(|e| anyhow::anyhow!("invalid root specifier '{}': {}", first, e))
+    } else {
+        Ok(default_entrypoint())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn isolate_config_defaults() {
+        let config = IsolateConfig::default();
+        assert_eq!(config.max_heap_size_bytes, 128 * 1024 * 1024);
+        assert_eq!(config.cpu_time_limit_ms, 50_000);
+        assert_eq!(config.wall_clock_timeout_ms, 60_000);
+    }
+
+    #[test]
+    fn isolate_config_serde_defaults() {
+        let config: IsolateConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(config.max_heap_size_bytes, 128 * 1024 * 1024);
+        assert_eq!(config.cpu_time_limit_ms, 50_000);
+        assert_eq!(config.wall_clock_timeout_ms, 60_000);
+    }
+
+    #[test]
+    fn isolate_config_serde_custom() {
+        let json = r#"{"max_heap_size_bytes":999,"cpu_time_limit_ms":100,"wall_clock_timeout_ms":200}"#;
+        let config: IsolateConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.max_heap_size_bytes, 999);
+        assert_eq!(config.cpu_time_limit_ms, 100);
+        assert_eq!(config.wall_clock_timeout_ms, 200);
+    }
+
+    #[test]
+    fn isolate_config_serializes() {
+        let config = IsolateConfig::default();
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("\"max_heap_size_bytes\""));
+        assert!(json.contains("\"cpu_time_limit_ms\""));
+        assert!(json.contains("\"wall_clock_timeout_ms\""));
+    }
+
+    #[test]
+    fn default_entrypoint_is_index_ts() {
+        let spec = default_entrypoint();
+        assert_eq!(spec.as_str(), "file:///src/index.ts");
+    }
+}
