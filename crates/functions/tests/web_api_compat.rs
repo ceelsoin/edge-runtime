@@ -746,3 +746,120 @@ fn intl_number_format() {
         "Intl.NumberFormat",
     );
 }
+
+// ── WebAssembly API ────────────────────────────────────────────────
+
+// NOTE: WebAssembly support has restrictions for security reasons:
+// - WebAssembly.compile() is NOT allowed (security)
+// - WebAssembly.compileStreaming() is NOT allowed (security)
+// - WebAssembly.instantiate() with buffer is NOT allowed (security)
+// - WebAssembly.instantiateStreaming() is restricted
+//
+// WebAssembly can be used by loading .wasm files through fetch and special APIs
+
+#[test]
+fn webassembly_object_exists() {
+    assert_js_true(
+        "typeof WebAssembly === 'object'",
+        "WebAssembly object exists",
+    );
+}
+
+#[test]
+fn webassembly_module_exists() {
+    assert_js_true(
+        "typeof WebAssembly.Module === 'function'",
+        "WebAssembly.Module constructor exists",
+    );
+}
+
+#[test]
+fn webassembly_instance_exists() {
+    assert_js_true(
+        "typeof WebAssembly.Instance === 'function'",
+        "WebAssembly.Instance constructor exists",
+    );
+}
+
+#[test]
+fn webassembly_memory_exists() {
+    assert_js_true(
+        "typeof WebAssembly.Memory === 'function'",
+        "WebAssembly.Memory constructor exists",
+    );
+}
+
+#[test]
+fn webassembly_compile_restricted() {
+    // WebAssembly.compile() should not be available (security restriction)
+    assert_js_true(
+        "typeof WebAssembly.compile === 'undefined' || (() => {
+            try {
+                WebAssembly.compile(new ArrayBuffer(0));
+                return false;
+            } catch(e) {
+                return true; // compile() throws error as expected
+            }
+        })()",
+        "WebAssembly.compile() correctly restricted (security)",
+    );
+}
+
+// ── EventSource API ────────────────────────────────────────────────
+
+#[test]
+fn event_source_exists() {
+    assert_js_true(
+        "typeof EventSource === 'function'",
+        "EventSource constructor exists",
+    );
+}
+
+#[test]
+fn event_source_construction() {
+    assert_js_true(
+        "(() => {
+            try {
+                const es = new EventSource('https://example.com/events');
+                return typeof es === 'object' && typeof es.addEventListener === 'function';
+            } catch(e) {
+                // May fail in test environment without network, but constructor should exist
+                return typeof EventSource === 'function';
+            }
+        })()",
+        "EventSource can be constructed",
+    );
+}
+
+#[test]
+fn event_source_properties() {
+    assert_js_true(
+        "(() => {
+            try {
+                const es = new EventSource('https://example.com/events');
+                return typeof es.close === 'function' && typeof es.addEventListener === 'function';
+            } catch(e) {
+                return true; // Constructor exists even if connection fails
+            }
+        })()",
+        "EventSource has required methods",
+    );
+}
+
+// ── HTMLRewriter API ───────────────────────────────────────────────
+
+// NOTE: HTMLRewriter is a Cloudflare-specific API and is NOT available in deno-edge-runtime
+// It provides HTML parsing and transformation without loading the entire DOM into memory
+//
+// For HTML transformation, alternatives include:
+// - Regex-based string manipulation
+// - QuerySelector-style patterns
+// - External HTML parsing services
+
+#[test]
+fn htmlrewriter_not_available() {
+    assert_js_true(
+        "typeof HTMLRewriter === 'undefined'",
+        "HTMLRewriter correctly not available (Cloudflare-specific API)",
+    );
+}

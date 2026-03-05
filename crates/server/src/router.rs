@@ -131,10 +131,35 @@ impl Router {
                 let functions = self.registry.list();
                 let total_requests: u64 = functions.iter().map(|f| f.metrics.total_requests).sum();
                 let total_errors: u64 = functions.iter().map(|f| f.metrics.total_errors).sum();
+                let total_cold_starts: u64 = functions.iter().map(|f| f.metrics.cold_starts).sum();
+                let total_cold_start_ms: u64 = functions
+                    .iter()
+                    .map(|f| f.metrics.total_cold_start_time_ms)
+                    .sum();
+                let total_warm_start_ms: u64 = functions
+                    .iter()
+                    .map(|f| f.metrics.total_warm_start_time_ms)
+                    .sum();
+
+                let avg_cold_start_ms = if total_cold_starts > 0 {
+                    total_cold_start_ms / total_cold_starts
+                } else {
+                    0
+                };
+
+                let avg_warm_start_ms = if total_requests > 0 {
+                    total_warm_start_ms / total_requests
+                } else {
+                    0
+                };
+
                 let body = serde_json::json!({
                     "function_count": self.registry.count(),
                     "total_requests": total_requests,
                     "total_errors": total_errors,
+                    "total_cold_starts": total_cold_starts,
+                    "avg_cold_start_ms": avg_cold_start_ms,
+                    "avg_warm_start_ms": avg_warm_start_ms,
                     "functions": functions,
                 });
                 json_response(StatusCode::OK, &body.to_string())

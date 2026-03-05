@@ -125,6 +125,9 @@ async fn run_isolate(
     };
     extensions::set_extension_transpiler(&mut runtime_opts);
 
+    // Track cold start timing
+    let cold_start_timer = std::time::Instant::now();
+
     let mut js_runtime = JsRuntime::new(runtime_opts);
 
     // Register the request handler bridge in the JS global scope.
@@ -145,6 +148,17 @@ async fn run_isolate(
 
     eval_result.await?;
 
+    // Record cold start time
+    let cold_start_duration_ms = cold_start_timer.elapsed().as_millis() as u64;
+    metrics.cold_start_count.fetch_add(1, Ordering::Relaxed);
+    metrics
+        .total_cold_start_time_ms
+        .fetch_add(cold_start_duration_ms, Ordering::Relaxed);
+    info!(
+        "function '{}' cold started in {}ms",
+        name, cold_start_duration_ms
+    );
+
     info!("function '{}' isolate initialized, entering request loop", name);
 
     // Request handling loop
@@ -154,9 +168,15 @@ async fn run_isolate(
                 metrics.active_requests.fetch_add(1, Ordering::Relaxed);
                 metrics.total_requests.fetch_add(1, Ordering::Relaxed);
 
+                // Track warm request timing
+                let warm_start_timer = std::time::Instant::now();
                 let result = handler::dispatch_request(&mut js_runtime, req.request).await;
+                let warm_duration_ms = warm_start_timer.elapsed().as_millis() as u64;
 
                 metrics.active_requests.fetch_sub(1, Ordering::Relaxed);
+                metrics
+                    .total_warm_start_time_ms
+                    .fetch_add(warm_duration_ms, Ordering::Relaxed);
                 if result.is_err() {
                     metrics.total_errors.fetch_add(1, Ordering::Relaxed);
                 }
