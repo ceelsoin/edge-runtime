@@ -31,3 +31,4 @@ hot-reload = []
 [dev-dependencies]
 deno_graph.workspace = true
 deno_ast.workspace = true
+rustls.workspace = true

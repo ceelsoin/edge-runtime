@@ -191,7 +191,18 @@ pub async fn dispatch_request(
     let resolved_value = resolved.await?;
 
     // Extract the JSON string from the resolved value
-    let scope = &mut js_runtime.handle_scope();
+    // Create a HandleScope and ContextScope for V8 operations
+    let context = js_runtime.main_context();
+    let isolate = js_runtime.v8_isolate();
+    let mut handle_scope = deno_core::v8::HandleScope::new(isolate);
+    let mut handle_scope = {
+        let pinned = unsafe { std::pin::Pin::new_unchecked(&mut handle_scope) };
+        pinned.init()
+    };
+    let scope = &mut handle_scope;
+    let context = deno_core::v8::Local::new(scope, context);
+    let scope = &mut deno_core::v8::ContextScope::new(scope, context);
+
     let local = deno_core::v8::Local::new(scope, resolved_value);
     let json_str = local
         .to_string(scope)
@@ -226,7 +237,7 @@ mod tests {
 
     fn init_v8() {
         INIT.call_once(|| {
-            deno_core::JsRuntime::init_platform(None, false);
+            deno_core::JsRuntime::init_platform(None);
         });
     }
 
@@ -252,8 +263,8 @@ mod tests {
             )
             .unwrap();
 
-        let scope = &mut runtime.handle_scope();
-        let local = deno_core::v8::Local::new(scope, val);
+        deno_core::scope!(scope, runtime);
+        let local = val.open(scope);
         assert!(local.is_true(), "__edgeRuntime should be an object on globalThis");
     }
 
@@ -269,8 +280,8 @@ mod tests {
             )
             .unwrap();
 
-        let scope = &mut runtime.handle_scope();
-        let local = deno_core::v8::Local::new(scope, val);
+        deno_core::scope!(scope, runtime);
+        let local = val.open(scope);
         assert!(local.is_true(), "Deno.serve should be a function");
     }
 

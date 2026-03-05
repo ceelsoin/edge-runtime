@@ -25,10 +25,15 @@ enum Commands {
     Bundle(commands::bundle::BundleArgs),
     /// Watch directory for TypeScript/JavaScript functions
     Watch(commands::watch::WatchArgs),
+    /// Run JavaScript/TypeScript compatibility tests inside the runtime
+    Test(commands::test::TestArgs),
 }
 
 fn main() -> Result<(), anyhow::Error> {
     let cli = Cli::parse();
+
+    // Required by deno_fetch/deno_net TLS operations (e.g. EventSource over HTTPS).
+    let _ = rustls::crypto::ring::default_provider().install_default();
 
     // Initialize tracing
     let env_filter = if cli.verbose {
@@ -44,11 +49,12 @@ fn main() -> Result<(), anyhow::Error> {
         .init();
 
     // Initialize V8 platform (must be done on main thread, before any JsRuntime)
-    deno_core::JsRuntime::init_platform(None, false);
+    deno_core::JsRuntime::init_platform(None);
 
     match cli.command {
         Commands::Start(args) => commands::start::run(args),
         Commands::Bundle(args) => commands::bundle::run(args),
         Commands::Watch(args) => commands::watch::run(args),
+        Commands::Test(args) => commands::test::run(args),
     }
 }

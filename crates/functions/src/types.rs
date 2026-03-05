@@ -292,6 +292,7 @@ mod tests {
         let entry = FunctionEntry {
             name: "test-fn".to_string(),
             eszip_bytes: Bytes::new(),
+            bundle_format: BundleFormat::Eszip,
             isolate_handle: None,
             status: FunctionStatus::Running,
             config: IsolateConfig::default(),

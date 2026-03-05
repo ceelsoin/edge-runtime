@@ -5,13 +5,15 @@
 
 use deno_core::{JsRuntime, RuntimeOptions};
 use runtime_core::extensions;
-use runtime_core::permissions::Permissions;
+use runtime_core::permissions::create_permissions_container;
 
 static INIT: std::sync::Once = std::sync::Once::new();
 
 fn init_v8() {
     INIT.call_once(|| {
-        deno_core::JsRuntime::init_platform(None, false);
+        // Initialize rustls crypto provider for TLS operations (e.g., EventSource over HTTPS)
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        deno_core::JsRuntime::init_platform(None);
     });
 }
 
@@ -24,10 +26,10 @@ fn make_runtime() -> JsRuntime {
     extensions::set_extension_transpiler(&mut opts);
     let mut runtime = JsRuntime::new(opts);
 
-    // Add Permissions to the op_state so that deno_web and other extensions can access it
+    // Add PermissionsContainer to the op_state so that deno_web and other extensions can access it
     {
         let op_state = runtime.op_state();
-        op_state.borrow_mut().put(Permissions);
+        op_state.borrow_mut().put(create_permissions_container());
     }
 
     runtime
@@ -52,8 +54,8 @@ fn assert_js_true(js: &str, desc: &str) {
         match result {
             Err(e) => panic!("[{desc}] JS execution error: {e}"),
             Ok(val) => {
-                let scope = &mut runtime.handle_scope();
-                let local = deno_core::v8::Local::new(scope, val);
+                deno_core::scope!(scope, runtime);
+                let local = val.open(scope);
                 assert!(local.is_true(), "[{desc}] expected true, got false");
             }
         }
@@ -66,8 +68,8 @@ async fn assert_js_true_async(js: &str, desc: &str) {
     match result {
         Err(e) => panic!("[{desc}] JS execution error: {e}"),
         Ok(val) => {
-            let scope = &mut runtime.handle_scope();
-            let local = deno_core::v8::Local::new(scope, val);
+            deno_core::scope!(scope, runtime);
+            let local = val.open(scope);
             assert!(local.is_true(), "[{desc}] expected true, got false");
         }
     }

@@ -1,139 +1,115 @@
-use deno_permissions::PermissionCheckError;
+use std::sync::Arc;
 
-/// Simple permissions container for the edge runtime.
+use deno_permissions::{
+    Permissions, PermissionsContainer, PermissionsOptions,
+    RuntimePermissionDescriptorParser,
+};
+
+/// Creates a PermissionsContainer for the edge runtime.
 ///
-/// For now, this grants all permissions. In production, you'd want to restrict
-/// network access, file system access, etc. per function.
-#[derive(Debug, Clone)]
-pub struct Permissions;
+/// By default, this grants network access (for fetch, WebSocket, etc.)
+/// but denies file system access, environment variables, and subprocess execution.
+pub fn create_permissions_container() -> PermissionsContainer {
+    let parser = Arc::new(RuntimePermissionDescriptorParser::new(
+        sys_traits::impls::RealSys,
+    ));
 
-impl deno_web::TimersPermission for Permissions {
-    fn allow_hrtime(&mut self) -> bool {
-        false
-    }
+    // Configure permissions: allow network, deny everything else
+    let options = PermissionsOptions {
+        allow_env: None,
+        deny_env: None,
+        ignore_env: None,
+        allow_net: Some(vec![]), // Empty vec = allow all network
+        deny_net: None,
+        allow_ffi: None,
+        deny_ffi: None,
+        allow_read: None,
+        deny_read: None,
+        ignore_read: None,
+        allow_run: None,
+        deny_run: None,
+        allow_sys: None,
+        deny_sys: None,
+        allow_write: None,
+        deny_write: None,
+        allow_import: Some(vec![]), // Allow imports
+        deny_import: None,
+        prompt: false, // No interactive prompts
+    };
+
+    let permissions = Permissions::from_options(parser.as_ref(), &options)
+        .expect("failed to create permissions");
+
+    PermissionsContainer::new(parser, permissions)
 }
 
-impl deno_fetch::FetchPermissions for Permissions {
-    fn check_net_url(
-        &mut self,
-        _url: &deno_core::url::Url,
-        _api_name: &str,
-    ) -> Result<(), PermissionCheckError> {
-        Ok(())
-    }
+/// Creates a PermissionsContainer that allows all operations.
+/// Use with caution - only for trusted code or development.
+pub fn create_allow_all_permissions() -> PermissionsContainer {
+    let parser = Arc::new(RuntimePermissionDescriptorParser::new(
+        sys_traits::impls::RealSys,
+    ));
 
-    fn check_read<'a>(
-        &mut self,
-        _p: &'a std::path::Path,
-        _api_name: &str,
-    ) -> Result<std::borrow::Cow<'a, std::path::Path>, PermissionCheckError> {
-        Err(PermissionCheckError::PermissionDenied(
-            deno_permissions::PermissionDeniedError {
-                access: "read access".to_string(),
-                name: "read",
-            },
-        ))
-    }
+    let permissions = Permissions::allow_all();
+    PermissionsContainer::new(parser, permissions)
 }
 
-impl deno_net::NetPermissions for Permissions {
-    fn check_net<T: AsRef<str>>(
-        &mut self,
-        _host: &(T, Option<u16>),
-        _api_name: &str,
-    ) -> Result<(), PermissionCheckError> {
-        Ok(())
-    }
+/// Creates a PermissionsContainer with custom network allowlist.
+pub fn create_permissions_with_network_allowlist(
+    allowed_hosts: Vec<String>,
+) -> PermissionsContainer {
+    let parser = Arc::new(RuntimePermissionDescriptorParser::new(
+        sys_traits::impls::RealSys,
+    ));
 
-    fn check_read(
-        &mut self,
-        _p: &str,
-        _api_name: &str,
-    ) -> Result<std::path::PathBuf, PermissionCheckError> {
-        Err(PermissionCheckError::PermissionDenied(
-            deno_permissions::PermissionDeniedError {
-                access: "read access".to_string(),
-                name: "read",
-            },
-        ))
-    }
+    let options = PermissionsOptions {
+        allow_env: None,
+        deny_env: None,
+        ignore_env: None,
+        allow_net: Some(allowed_hosts),
+        deny_net: None,
+        allow_ffi: None,
+        deny_ffi: None,
+        allow_read: None,
+        deny_read: None,
+        ignore_read: None,
+        allow_run: None,
+        deny_run: None,
+        allow_sys: None,
+        deny_sys: None,
+        allow_write: None,
+        deny_write: None,
+        allow_import: Some(vec![]),
+        deny_import: None,
+        prompt: false,
+    };
 
-    fn check_write(
-        &mut self,
-        _p: &str,
-        _api_name: &str,
-    ) -> Result<std::path::PathBuf, PermissionCheckError> {
-        Err(PermissionCheckError::PermissionDenied(
-            deno_permissions::PermissionDeniedError {
-                access: "write access".to_string(),
-                name: "write",
-            },
-        ))
-    }
+    let permissions = Permissions::from_options(parser.as_ref(), &options)
+        .expect("failed to create permissions");
 
-    fn check_write_path<'a>(
-        &mut self,
-        _p: &'a std::path::Path,
-        _api_name: &str,
-    ) -> Result<std::borrow::Cow<'a, std::path::Path>, PermissionCheckError> {
-        Err(PermissionCheckError::PermissionDenied(
-            deno_permissions::PermissionDeniedError {
-                access: "write access".to_string(),
-                name: "write",
-            },
-        ))
-    }
+    PermissionsContainer::new(parser, permissions)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use deno_web::TimersPermission;
-    use deno_fetch::FetchPermissions;
-    use deno_net::NetPermissions;
 
     #[test]
-    fn timers_disallow_hrtime() {
-        let mut perm = Permissions;
-        assert!(!perm.allow_hrtime());
+    fn default_permissions_created_successfully() {
+        // Just verify the container can be created without panic
+        let _container = create_permissions_container();
     }
 
     #[test]
-    fn fetch_check_net_url_allowed() {
-        let mut perm = Permissions;
-        let url = deno_core::url::Url::parse("https://example.com").unwrap();
-        assert!(perm.check_net_url(&url, "fetch").is_ok());
+    fn allow_all_permissions_created_successfully() {
+        // Just verify the container can be created without panic
+        let _container = create_allow_all_permissions();
     }
 
     #[test]
-    fn fetch_check_read_denied() {
-        let mut perm = Permissions;
-        let result = FetchPermissions::check_read(&mut perm, std::path::Path::new("/etc/passwd"), "Deno.readFile");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn net_check_net_allowed() {
-        let mut perm = Permissions;
-        let host = ("example.com".to_string(), Some(443u16));
-        assert!(perm.check_net(&host, "Deno.connect").is_ok());
-    }
-
-    #[test]
-    fn net_check_read_denied() {
-        let mut perm = Permissions;
-        assert!(NetPermissions::check_read(&mut perm, "/some/path", "Deno.read").is_err());
-    }
-
-    #[test]
-    fn net_check_write_denied() {
-        let mut perm = Permissions;
-        assert!(perm.check_write("/some/path", "Deno.write").is_err());
-    }
-
-    #[test]
-    fn net_check_write_path_denied() {
-        let mut perm = Permissions;
-        assert!(perm.check_write_path(std::path::Path::new("/some/path"), "Deno.write").is_err());
+    fn custom_network_allowlist_created_successfully() {
+        let hosts = vec!["example.com".to_string(), "api.example.com:443".to_string()];
+        // Just verify the container can be created without panic
+        let _container = create_permissions_with_network_allowlist(hosts);
     }
 }

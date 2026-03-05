@@ -6,14 +6,14 @@
 
 use deno_core::{JsRuntime, RuntimeOptions};
 use runtime_core::extensions;
-use runtime_core::permissions::Permissions;
+use runtime_core::permissions::create_permissions_container;
 use std::fmt::Write as FmtWrite;
 
 static INIT: std::sync::Once = std::sync::Once::new();
 
 fn init_v8() {
     INIT.call_once(|| {
-        deno_core::JsRuntime::init_platform(None, false);
+        deno_core::JsRuntime::init_platform(None);
     });
 }
 
@@ -26,10 +26,10 @@ fn make_runtime() -> JsRuntime {
     extensions::set_extension_transpiler(&mut opts);
     let mut runtime = JsRuntime::new(opts);
 
-    // Add Permissions to the op_state so that deno_web and other extensions can access it
+    // Add PermissionsContainer to the op_state so that deno_web and other extensions can access it
     {
-        let mut op_state = runtime.op_state();
-        op_state.borrow_mut().put(Permissions);
+        let op_state = runtime.op_state();
+        op_state.borrow_mut().put(create_permissions_container());
     }
 
     runtime
@@ -48,8 +48,8 @@ struct ApiCheck {
 fn eval_js(runtime: &mut JsRuntime, js: &str) -> String {
     match runtime.execute_script("<check>", js.to_string()) {
         Ok(val) => {
-            let scope = &mut runtime.handle_scope();
-            let local = deno_core::v8::Local::new(scope, val);
+            deno_core::scope!(scope, runtime);
+            let local = val.open(scope);
             if let Some(s) = local.to_string(scope) {
                 s.to_rust_string_lossy(scope)
             } else {

@@ -172,15 +172,15 @@ impl Router {
                 let current_pid = sysinfo::get_current_pid().unwrap_or(sysinfo::Pid::from(0));
                 let process_memory_mb = sys
                     .process(current_pid)
-                    .map(|p| p.memory() / 1024) // Convert from KB to MB
-                    .unwrap_or(0);
+                    .map(|p| p.memory() as f64 / (1024.0 * 1024.0)) // Convert from bytes to MB
+                    .unwrap_or(0.0);
 
                 // Estimate memory per function (simple division)
                 let function_count = self.registry.count();
                 let estimated_memory_per_function_mb = if function_count > 0 {
-                    process_memory_mb / (function_count as u64)
+                    process_memory_mb / (function_count as f64)
                 } else {
-                    0
+                    0.0
                 };
 
                 let body = serde_json::json!({

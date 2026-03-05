@@ -13,8 +13,7 @@ impl MemCheck {
     /// Check if the isolate has exceeded its memory limit.
     /// Returns `(used_bytes, exceeded)`.
     pub fn check(&self, isolate: &mut deno_core::v8::Isolate) -> (usize, bool) {
-        let mut stats = deno_core::v8::HeapStatistics::default();
-        isolate.get_heap_statistics(&mut stats);
+        let stats = isolate.get_heap_statistics();
         let used = stats.used_heap_size() + stats.external_memory();
         let exceeded = self.limit_bytes > 0 && used >= self.limit_bytes;
         (used, exceeded)

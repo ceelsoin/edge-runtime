@@ -2,4 +2,4 @@
 git-fetch-with-cli = true
 
 [env]
-RUSTY_V8_MIRROR = "https://github.com/supabase/rusty_v8/releases/download"
+RUSTY_V8_MIRROR = "https://github.com/denoland/rusty_v8/releases/download"

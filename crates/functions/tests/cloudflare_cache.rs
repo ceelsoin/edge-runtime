@@ -1,6 +1,6 @@
 use deno_core::{JsRuntime, RuntimeOptions};
 use runtime_core::extensions;
-use runtime_core::permissions::Permissions;
+use runtime_core::permissions::create_permissions_container;
 
 // This module tests Cloudflare Workers Cache API
 // Reference: https://developers.cloudflare.com/workers/runtime-apis/
@@ -9,7 +9,7 @@ static INIT: std::sync::Once = std::sync::Once::new();
 
 fn init_v8() {
     INIT.call_once(|| {
-        deno_core::JsRuntime::init_platform(None, false);
+        deno_core::JsRuntime::init_platform(None);
     });
 }
 
@@ -23,8 +23,8 @@ fn make_runtime() -> JsRuntime {
     let mut runtime = JsRuntime::new(opts);
 
     {
-        let mut op_state = runtime.op_state();
-        op_state.borrow_mut().put(Permissions);
+        let op_state = runtime.op_state();
+        op_state.borrow_mut().put(create_permissions_container());
     }
 
     runtime
@@ -48,8 +48,8 @@ fn assert_js_true(js: &str, desc: &str) {
         match result {
             Err(e) => panic!("[{desc}] JS execution error: {e}"),
             Ok(val) => {
-                let scope = &mut runtime.handle_scope();
-                let local = deno_core::v8::Local::new(scope, val);
+                deno_core::scope!(scope, runtime);
+                let local = val.open(scope);
                 assert!(local.is_true(), "[{desc}] expected true, got false");
             }
         }
@@ -62,8 +62,8 @@ async fn assert_js_true_async(js: &str, desc: &str) {
     match result {
         Err(e) => panic!("[{desc}] JS execution error: {e}"),
         Ok(val) => {
-            let scope = &mut runtime.handle_scope();
-            let local = deno_core::v8::Local::new(scope, val);
+            deno_core::scope!(scope, runtime);
+            let local = val.open(scope);
             assert!(local.is_true(), "[{desc}] expected true, got false");
         }
     }

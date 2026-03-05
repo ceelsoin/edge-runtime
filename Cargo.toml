@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-authors = ["Globo <team@globo.com>"]
+authors = ["Globo <devex-serverless@g.globo>"]
 edition = "2021"
 license = "MIT"
 
@@ -18,34 +18,41 @@ runtime-core = { version = "0.1.0", path = "./crates/runtime-core" }
 edge-server = { version = "0.1.0", path = "./crates/server" }
 functions = { version = "0.1.0", path = "./crates/functions" }
 
-# --- deno ecosystem ---
-deno_core = "0.324.0"
-deno_ast = { version = "=0.44.0", features = ["transpiling"] }
-deno_console = "0.182.0"
-deno_url = "0.182.0"
-deno_web = "0.213.0"
-deno_webidl = "0.182.0"
-deno_webgpu = { version = "0.203.0" }
-deno_fetch = "0.206.0"
-deno_crypto = "0.196.0"
-deno_node = { version = "0.174.0" }
-deno_node_crypto = { version = "0.6.0" }
-deno_net = "0.174.0"
-deno_tls = "0.169.0"
-deno_http = "0.180.0"
-deno_io = "0.92.0"
-deno_permissions = "0.42.0"
-deno_telemetry = "0.4.0"
+# --- deno ecosystem (official) ---
+deno_core = "0.390.0"
+deno_ast = { version = "=0.53.1", features = ["transpiling"] }
+deno_web = "0.268.0"
+deno_webidl = "0.237.0"
+deno_fetch = "0.261.0"
+deno_crypto = "0.251.0"
+deno_net = "0.229.0"
+deno_tls = "0.224.0"
+deno_io = "0.147.0"
+deno_permissions = "0.96.0"
+deno_telemetry = "0.59.0"
+# Node.js compatibility layer (required by deno_crypto for constants)
+deno_node = "0.175.0"
+deno_fs = "0.147.0"
+deno_napi = "0.168.0"
+napi_sym = "0.167.0"
+# deno_process required by deno_node (but dangerous ops blocked in sandbox)
+deno_process = "0.52.0"
 
 # --- module graph ---
-deno_graph = "0.86.3"
+deno_graph = "0.107.0"
+deno_path_util = "0.6.4"
+deno_error = "0.7.1"
+deno_semver = "0.9.1"
+sys_traits = { version = "0.1.24", features = ["real", "libc"] }
+# Node module resolution (for npm stub traits)
+node_resolver = "0.75.0"
 
 # --- eszip ---
-eszip = "=0.80.0"
+eszip = "0.109.0"
 
 # --- HTTP stack ---
 hyper = { version = "1.4.1", features = ["full"] }
-hyper-util = { version = "=0.1.7", features = ["tokio", "server", "server-auto", "server-graceful"] }
+hyper-util = { version = "0.1.20", features = ["tokio", "server", "server-auto", "server-graceful"] }
 http = "1.0"
 http-body = "1.0"
 http-body-util = "0.1.2"
@@ -104,11 +111,7 @@ notify = "6.1"
 regex = "1.10"
 walkdir = "2.4"
 sysinfo = "0.30"
-
-[patch.crates-io]
-deno_core = { git = "https://github.com/supabase/deno_core", branch = "324-supabase" }
-eszip = { git = "https://github.com/supabase/eszip", branch = "fix-pub-vis-0-80-1" }
-v8 = { git = "https://github.com/supabase/rusty_v8", tag = "v130.0.7" }
+glob = "0.3"
 
 [profile.release]
 debug = true

@@ -34,8 +34,9 @@ fn build_eszip(specifier: &str, source: &str) -> Vec<u8> {
 
 async fn build_eszip_async(specifier: &str, source: &str) -> Vec<u8> {
     use deno_ast::{EmitOptions, TranspileOptions};
+    use deno_graph::ast::CapturingModuleAnalyzer;
     use deno_graph::source::{LoadOptions, LoadResponse, Loader};
-    use deno_graph::{BuildOptions, CapturingModuleAnalyzer, GraphKind, ModuleGraph};
+    use deno_graph::{BuildOptions, GraphKind, ModuleGraph};
 
     struct InlineLoader {
         specifier: String,
@@ -57,6 +58,7 @@ async fn build_eszip_async(specifier: &str, source: &str) -> Vec<u8> {
                         content: source.into_bytes().into(),
                         specifier: spec,
                         maybe_headers: None,
+                        mtime: None,
                     }))
                 } else {
                     Ok(None)
@@ -76,6 +78,7 @@ async fn build_eszip_async(specifier: &str, source: &str) -> Vec<u8> {
     graph
         .build(
             vec![root],
+            vec![],
             &loader,
             BuildOptions {
                 module_analyzer: &analyzer,
@@ -92,6 +95,7 @@ async fn build_eszip_async(specifier: &str, source: &str) -> Vec<u8> {
         emit_options: EmitOptions::default(),
         relative_file_base: None,
         npm_packages: None,
+        npm_snapshot: Default::default(),
     })
     .expect("from_graph failed");
 
@@ -112,7 +116,7 @@ async fn parse_eszip(bytes: &[u8]) -> eszip::EszipV2 {
 /// Test 1: JsRuntime boots without panicking (extensions + transpiler).
 #[test]
 fn test_runtime_boots() {
-    deno_core::JsRuntime::init_platform(None, false);
+    deno_core::JsRuntime::init_platform(None);
 
     let eszip_bytes = build_eszip(
         "file:///test_boot.js",
@@ -142,7 +146,7 @@ fn test_runtime_boots() {
 /// Test 2: Load and evaluate an eszip module (same path as deploy).
 #[test]
 fn test_module_load_and_eval() {
-    deno_core::JsRuntime::init_platform(None, false);
+    deno_core::JsRuntime::init_platform(None);
 
     let eszip_bytes = build_eszip(
         "file:///test_handler.js",
@@ -195,10 +199,12 @@ fn test_module_load_and_eval() {
             )
             .map_err(|e| format!("handler check failed: {e}"))?;
 
-        let scope = &mut js_runtime.handle_scope();
-        let local_val = deno_core::v8::Local::new(scope, val);
-        if !local_val.is_true() {
-            return Err("handler was NOT registered".to_string());
+        {
+            deno_core::scope!(scope, js_runtime);
+            let local_val = val.open(scope);
+            if !local_val.is_true() {
+                return Err("handler was NOT registered".to_string());
+            }
         }
 
         Ok(())
@@ -210,7 +216,7 @@ fn test_module_load_and_eval() {
 /// Test 3: Full cycle — bundle JS, parse, boot runtime, inject bridge, load module, send request.
 #[test]
 fn test_full_request_cycle() {
-    deno_core::JsRuntime::init_platform(None, false);
+    deno_core::JsRuntime::init_platform(None);
 
     let eszip_bytes = build_eszip(
         "file:///test_full.js",
