@@ -53,6 +53,11 @@ deno_core::extension!(
         dir "src/assert",
         "ext:edge_assert/assert.ts" = "assert.ts",
         "ext:edge_assert/mod.ts" = "mod.ts",
+        "ext:edge_assert/mock/mod.ts" = "mock/mod.ts",
+        "ext:edge_assert/mock/mockFn.ts" = "mock/mockFn.ts",
+        "ext:edge_assert/mock/spy.ts" = "mock/spy.ts",
+        "ext:edge_assert/mock/fetch.ts" = "mock/fetch.ts",
+        "ext:edge_assert/mock/time.ts" = "mock/time.ts",
     ],
 );
 

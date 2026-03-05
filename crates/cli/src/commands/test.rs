@@ -1,8 +1,8 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
-use std::io::Write;
 
 use clap::{ArgAction, Args};
 use deno_ast::{EmitOptions, TranspileOptions};
@@ -68,6 +68,32 @@ impl CliStyle {
     fn black_on_cyan(&self, text: &str) -> String {
         self.paint("30;46", text)
     }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct TestRunStats {
+    tests_total: usize,
+    tests_passed: usize,
+    tests_failed: usize,
+    tests_ignored: usize,
+}
+
+impl TestRunStats {
+    fn executed_tests(self) -> usize {
+        self.tests_passed + self.tests_failed
+    }
+
+    fn add_assign(&mut self, other: TestRunStats) {
+        self.tests_total += other.tests_total;
+        self.tests_passed += other.tests_passed;
+        self.tests_failed += other.tests_failed;
+        self.tests_ignored += other.tests_ignored;
+    }
+}
+
+struct FileRunOutcome {
+    stats: TestRunStats,
+    error: Option<anyhow::Error>,
 }
 
 fn progress_bar(done: usize, total: usize, width: usize) -> String {
@@ -186,13 +212,18 @@ fn load_edge_assert_module(
     let relative_path = match specifier.as_str() {
         "edge://assert/mod.ts" => {
             return Ok(Some(
-                b"export { AssertionError, assert, assertEquals, assertExists, assertNotEquals, assertRejects, assertThrows } from 'edge://assert/assert.ts';\n"
+                b"export * from 'edge://assert/assert.ts';\n"
                     .to_vec(),
             ));
         }
         "edge://assert/assert.ts" => "crates/runtime-core/src/assert/assert.ts",
         "ext:edge_assert/mod.ts" => "crates/runtime-core/src/assert/mod.ts",
         "ext:edge_assert/assert.ts" => "crates/runtime-core/src/assert/assert.ts",
+        "ext:edge_assert/mock/mod.ts" => "crates/runtime-core/src/assert/mock/mod.ts",
+        "ext:edge_assert/mock/mockFn.ts" => "crates/runtime-core/src/assert/mock/mockFn.ts",
+        "ext:edge_assert/mock/spy.ts" => "crates/runtime-core/src/assert/mock/spy.ts",
+        "ext:edge_assert/mock/fetch.ts" => "crates/runtime-core/src/assert/mock/fetch.ts",
+        "ext:edge_assert/mock/time.ts" => "crates/runtime-core/src/assert/mock/time.ts",
         _ => return Ok(None),
     };
 
@@ -240,28 +271,41 @@ pub fn run(args: TestArgs) -> Result<(), anyhow::Error> {
         let mut passed = 0usize;
         let mut failed = 0usize;
         let mut failures: Vec<(String, String)> = Vec::new();
+        let mut aggregated_test_stats = TestRunStats::default();
         let total = files.len();
 
         for file in files {
             let label = file.display().to_string();
-            print!(
-                "\n{} {}",
-                style.cyan("RUNS"),
-                style.dim(&label)
-            );
+            print!("\n{} {}", style.cyan("RUNS"), style.dim(&label));
             let _ = std::io::stdout().flush();
             let started_file = Instant::now();
 
             match run_single_test_file(&file).await {
-                Ok(()) => {
-                    passed += 1;
-                    let elapsed = started_file.elapsed().as_secs_f64();
-                    println!(
-                        "\n{} {} {}",
-                        style.black_on_green(" PASS "),
-                        style.bold(&label),
-                        style.dim(&format!("({:.2}s)", elapsed))
-                    );
+                Ok(outcome) => {
+                    aggregated_test_stats.add_assign(outcome.stats);
+
+                    if let Some(err) = outcome.error {
+                        failed += 1;
+                        let elapsed = started_file.elapsed().as_secs_f64();
+                        let err_text = err.to_string();
+                        failures.push((label.clone(), err_text.clone()));
+                        eprintln!(
+                            "\n{} {} {}",
+                            style.white_on_red(" FAIL "),
+                            style.bold(&label),
+                            style.dim(&format!("({:.2}s)", elapsed))
+                        );
+                        eprintln!("{} {}", style.red("  ●"), err_text);
+                    } else {
+                        passed += 1;
+                        let elapsed = started_file.elapsed().as_secs_f64();
+                        println!(
+                            "\n{} {} {}",
+                            style.black_on_green(" PASS "),
+                            style.bold(&label),
+                            style.dim(&format!("({:.2}s)", elapsed))
+                        );
+                    }
                 }
                 Err(err) => {
                     failed += 1;
@@ -303,6 +347,19 @@ pub fn run(args: TestArgs) -> Result<(), anyhow::Error> {
                 style.green(&failed.to_string())
             }
         );
+        println!(
+            "{}: {} total, {} executed, {} passed, {} failed, {} ignored",
+            style.bold("Tests"),
+            aggregated_test_stats.tests_total,
+            aggregated_test_stats.executed_tests(),
+            style.green(&aggregated_test_stats.tests_passed.to_string()),
+            if aggregated_test_stats.tests_failed > 0 {
+                style.red(&aggregated_test_stats.tests_failed.to_string())
+            } else {
+                style.green(&aggregated_test_stats.tests_failed.to_string())
+            },
+            style.dim(&aggregated_test_stats.tests_ignored.to_string())
+        );
         println!("{}: {:.2}s", style.bold("Time"), total_time);
 
         if !failures.is_empty() {
@@ -340,10 +397,7 @@ fn discover_test_files(path_or_pattern: &str, ignore_patterns: &[String]) -> Res
 
     let ignore_matchers = compile_patterns(ignore_patterns)?;
 
-    files.retain(|path| {
-        is_supported_test_file(path)
-            && !matches_ignore(path, &cwd, &ignore_matchers)
-    });
+    files.retain(|path| is_supported_test_file(path) && !matches_ignore(path, &cwd, &ignore_matchers));
 
     files.sort();
     files.dedup();
@@ -406,7 +460,47 @@ fn matches_ignore(path: &Path, cwd: &Path, ignore_patterns: &[Pattern]) -> bool 
     })
 }
 
-async fn run_single_test_file(file_path: &Path) -> Result<(), anyhow::Error> {
+fn read_test_stats(js_runtime: &mut JsRuntime) -> TestRunStats {
+    let script = r#"(() => {
+      // deno-lint-ignore no-explicit-any
+      const stats = (globalThis).__edgeTestStats;
+      if (!stats) return "0,0,0,0";
+      return [
+        Number(stats.testsTotal ?? 0),
+        Number(stats.testsPassed ?? 0),
+        Number(stats.testsFailed ?? 0),
+        Number(stats.testsIgnored ?? 0),
+      ].join(",");
+    })()"#;
+
+    let Ok(value) = js_runtime.execute_script("<test-stats>", script) else {
+        return TestRunStats::default();
+    };
+
+    deno_core::scope!(scope, js_runtime);
+    let local = value.open(scope);
+    let Some(text) = local.to_string(scope) else {
+        return TestRunStats::default();
+    };
+    let stats_text = text.to_rust_string_lossy(scope);
+    let parts: Vec<&str> = stats_text.split(',').collect();
+    if parts.len() != 4 {
+        return TestRunStats::default();
+    }
+
+    let parse = |idx: usize| -> usize {
+        parts.get(idx).and_then(|v| v.parse::<usize>().ok()).unwrap_or(0)
+    };
+
+    TestRunStats {
+        tests_total: parse(0),
+        tests_passed: parse(1),
+        tests_failed: parse(2),
+        tests_ignored: parse(3),
+    }
+}
+
+async fn run_single_test_file(file_path: &Path) -> Result<FileRunOutcome, anyhow::Error> {
     let entrypoint = file_path
         .canonicalize()
         .map_err(|e| anyhow::anyhow!("cannot resolve '{}': {e}", file_path.display()))?;
@@ -458,6 +552,12 @@ async fn run_single_test_file(file_path: &Path) -> Result<(), anyhow::Error> {
         op_state.borrow_mut().put(create_permissions_container());
     }
 
+    let file_path_js = format!(
+        "globalThis.__edgeTestFilePath = {:?};",
+        entrypoint.to_string_lossy().to_string()
+    );
+    js_runtime.execute_script("<set-test-file>", file_path_js)?;
+
     let module_id = js_runtime.load_main_es_module(&root_url).await?;
     let eval_result = js_runtime.mod_evaluate(module_id);
 
@@ -468,7 +568,14 @@ async fn run_single_test_file(file_path: &Path) -> Result<(), anyhow::Error> {
         })
         .await?;
 
-    eval_result.await?;
+    let eval_outcome = eval_result.await;
+    let stats = read_test_stats(&mut js_runtime);
 
-    Ok(())
+    match eval_outcome {
+        Ok(()) => Ok(FileRunOutcome { stats, error: None }),
+        Err(err) => Ok(FileRunOutcome {
+            stats,
+            error: Some(err.into()),
+        }),
+    }
 }
