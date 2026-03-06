@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-authors = ["Globo <devex-serverless@g.globo>"]
+authors = ["Globo"]
 edition = "2021"
 license = "MIT"
 
