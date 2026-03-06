@@ -1,11 +1,17 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use clap::Args;
+use clap::{Args, ValueEnum};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use runtime_core::isolate::IsolateConfig;
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum SourceMapMode {
+    None,
+    Inline,
+}
 
 #[derive(Args)]
 pub struct StartArgs {
@@ -44,6 +50,10 @@ pub struct StartArgs {
     /// Default wall clock timeout per request in ms (0 = unlimited)
     #[arg(long, default_value_t = 60000, env = "EDGE_RUNTIME_WALL_CLOCK_TIMEOUT_MS")]
     wall_clock_timeout_ms: u64,
+
+    /// Source map handling for modules loaded from eszip
+    #[arg(long, value_enum, default_value = "none", env = "EDGE_RUNTIME_SOURCE_MAP")]
+    sourcemap: SourceMapMode,
 }
 
 pub fn run(args: StartArgs) -> Result<(), anyhow::Error> {
@@ -60,6 +70,9 @@ pub fn run(args: StartArgs) -> Result<(), anyhow::Error> {
             max_heap_size_bytes: (args.max_heap_mib as usize) * 1024 * 1024,
             cpu_time_limit_ms: args.cpu_time_limit_ms,
             wall_clock_timeout_ms: args.wall_clock_timeout_ms,
+            inspect_port: None,
+            inspect_brk: false,
+            enable_source_maps: matches!(args.sourcemap, SourceMapMode::Inline),
         };
 
         let registry = Arc::new(functions::registry::FunctionRegistry::new(

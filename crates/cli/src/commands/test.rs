@@ -1,12 +1,19 @@
 use std::io::Write;
+use std::io::ErrorKind;
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::thread;
 use std::time::Instant;
 
 use clap::{ArgAction, Args};
 use deno_ast::{EmitOptions, TranspileOptions};
 use deno_core::{JsRuntime, PollEventLoopOptions, RuntimeOptions};
+use deno_core::{
+    InspectorMsg, InspectorSessionChannels, InspectorSessionKind, InspectorSessionProxy,
+};
 use deno_graph::ast::CapturingModuleAnalyzer;
 use deno_graph::source::{LoadError, LoadOptions, LoadResponse, Loader};
 use deno_graph::{BuildOptions, GraphKind, ModuleGraph};
@@ -14,6 +21,7 @@ use glob::Pattern;
 use runtime_core::extensions;
 use runtime_core::module_loader::EszipModuleLoader;
 use runtime_core::permissions::create_permissions_container;
+use tungstenite::{Message, WebSocket};
 use url::Url;
 
 struct CliStyle {
@@ -121,6 +129,24 @@ pub struct TestArgs {
     /// Ignore path/pattern (can be used multiple times)
     #[arg(short = 'i', long = "ignore", action = ArgAction::Append)]
     ignore: Vec<String>,
+
+    /// Enable V8 inspector protocol server (default port: 9229)
+    #[arg(long, value_name = "PORT", num_args = 0..=1, default_missing_value = "9229")]
+    inspect: Option<u16>,
+}
+
+struct InspectorServerGuard {
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for InspectorServerGuard {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 /// A simple file-system loader for deno_graph.
@@ -262,6 +288,13 @@ pub fn run(args: TestArgs) -> Result<(), anyhow::Error> {
             ));
         }
 
+        if args.inspect.is_some() && files.len() != 1 {
+            return Err(anyhow::anyhow!(
+                "--inspect requires exactly one test file; got {}. Use --path with a single file",
+                files.len()
+            ));
+        }
+
         println!(
             "{} {}",
             style.black_on_cyan(" RUN "),
@@ -280,7 +313,7 @@ pub fn run(args: TestArgs) -> Result<(), anyhow::Error> {
             let _ = std::io::stdout().flush();
             let started_file = Instant::now();
 
-            match run_single_test_file(&file).await {
+            match run_single_test_file(&file, args.inspect).await {
                 Ok(outcome) => {
                     aggregated_test_stats.add_assign(outcome.stats);
 
@@ -500,7 +533,10 @@ fn read_test_stats(js_runtime: &mut JsRuntime) -> TestRunStats {
     }
 }
 
-async fn run_single_test_file(file_path: &Path) -> Result<FileRunOutcome, anyhow::Error> {
+async fn run_single_test_file(
+    file_path: &Path,
+    inspect_port: Option<u16>,
+) -> Result<FileRunOutcome, anyhow::Error> {
     let entrypoint = file_path
         .canonicalize()
         .map_err(|e| anyhow::anyhow!("cannot resolve '{}': {e}", file_path.display()))?;
@@ -541,12 +577,36 @@ async fn run_single_test_file(file_path: &Path) -> Result<FileRunOutcome, anyhow
 
     let mut opts = RuntimeOptions {
         module_loader: Some(module_loader),
-        extensions: extensions::get_extensions(),
+        extensions: extensions::get_extensions_with_edge_assert(true),
         ..Default::default()
     };
     extensions::set_extension_transpiler(&mut opts);
 
     let mut js_runtime = JsRuntime::new(opts);
+
+    let _inspector_guard = if let Some(port) = inspect_port {
+        js_runtime.maybe_init_inspector();
+        let inspector = js_runtime.inspector();
+        let session_sender = inspector.get_session_sender();
+        let guard = start_inspector_server(session_sender, port, entrypoint.display().to_string())?;
+
+        println!(
+            "\nInspector listening on ws://127.0.0.1:{}/ws (target: {})",
+            port,
+            entrypoint.display()
+        );
+        println!(
+            "Open VS Code and attach debugger after reading target list at http://127.0.0.1:{}/json/list",
+            port
+        );
+
+        // Wait for debugger client and pause on first statement for reliable attach.
+        inspector.wait_for_session_and_break_on_next_statement();
+        Some(guard)
+    } else {
+        None
+    };
+
     {
         let op_state = js_runtime.op_state();
         op_state.borrow_mut().put(create_permissions_container());
@@ -577,5 +637,170 @@ async fn run_single_test_file(file_path: &Path) -> Result<FileRunOutcome, anyhow
             stats,
             error: Some(err.into()),
         }),
+    }
+}
+
+fn start_inspector_server(
+    session_sender: deno_core::futures::channel::mpsc::UnboundedSender<InspectorSessionProxy>,
+    port: u16,
+    target_path: String,
+) -> Result<InspectorServerGuard, anyhow::Error> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_for_thread = stop.clone();
+
+    let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|e| {
+        anyhow::anyhow!("failed to bind inspector server on 127.0.0.1:{}: {}", port, e)
+    })?;
+
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| anyhow::anyhow!("failed to configure inspector listener: {}", e))?;
+
+    let handle = thread::spawn(move || {
+        while !stop_for_thread.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok((mut stream, _addr)) => {
+                    let mut peek_buf = [0u8; 2048];
+                    let peek_len = match stream.peek(&mut peek_buf) {
+                        Ok(n) => n,
+                        Err(_) => continue,
+                    };
+
+                    let req = String::from_utf8_lossy(&peek_buf[..peek_len]).to_string();
+                    let first_line = req.lines().next().unwrap_or_default();
+                    let path = first_line.split_whitespace().nth(1).unwrap_or("/");
+                    let is_upgrade = req.to_ascii_lowercase().contains("upgrade: websocket");
+
+                    if is_upgrade && path == "/ws" {
+                        handle_websocket_session(&mut stream, &session_sender);
+                        continue;
+                    }
+
+                    if path == "/json" || path == "/json/list" {
+                        let body = format!(
+                            "[{{\"description\":\"deno-edge-runtime\",\"id\":\"edge-runtime\",\"title\":\"edge test runtime\",\"type\":\"node\",\"url\":\"file://{}\",\"webSocketDebuggerUrl\":\"ws://127.0.0.1:{}/ws\",\"devtoolsFrontendUrl\":\"devtools://devtools/bundled/inspector.html?ws=127.0.0.1:{}/ws\"}}]",
+                            target_path, port, port
+                        );
+                        let _ = write_http_json_response(&mut stream, &body);
+                        continue;
+                    }
+
+                    if path == "/json/version" {
+                        let body = "{\"Browser\":\"deno-edge-runtime\",\"Protocol-Version\":\"1.3\"}";
+                        let _ = write_http_json_response(&mut stream, body);
+                        continue;
+                    }
+
+                    let _ = write_http_not_found(&mut stream);
+                }
+                Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                    thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(_) => {
+                    thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+        }
+    });
+
+    Ok(InspectorServerGuard {
+        stop,
+        handle: Some(handle),
+    })
+}
+
+fn write_http_json_response(stream: &mut std::net::TcpStream, body: &str) -> std::io::Result<()> {
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream.write_all(response.as_bytes())
+}
+
+fn write_http_not_found(stream: &mut std::net::TcpStream) -> std::io::Result<()> {
+    let body = "not found";
+    let response = format!(
+        "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream.write_all(response.as_bytes())
+}
+
+fn handle_websocket_session(
+    stream: &mut std::net::TcpStream,
+    session_sender: &deno_core::futures::channel::mpsc::UnboundedSender<InspectorSessionProxy>,
+) {
+    let cloned = match stream.try_clone() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let mut ws = match tungstenite::accept(cloned) {
+        Ok(socket) => socket,
+        Err(_) => return,
+    };
+
+    if ws.get_mut().set_nonblocking(true).is_err() {
+        return;
+    }
+
+    let (to_runtime_tx, to_runtime_rx) = deno_core::futures::channel::mpsc::unbounded::<String>();
+    let (from_runtime_tx, mut from_runtime_rx) =
+        deno_core::futures::channel::mpsc::unbounded::<InspectorMsg>();
+
+    let proxy = InspectorSessionProxy {
+        channels: InspectorSessionChannels::Regular {
+            tx: from_runtime_tx,
+            rx: to_runtime_rx,
+        },
+        kind: InspectorSessionKind::NonBlocking {
+            wait_for_disconnect: false,
+        },
+    };
+
+    if session_sender.unbounded_send(proxy).is_err() {
+        return;
+    }
+
+    pump_websocket(&mut ws, to_runtime_tx, &mut from_runtime_rx);
+}
+
+fn pump_websocket(
+    ws: &mut WebSocket<std::net::TcpStream>,
+    to_runtime_tx: deno_core::futures::channel::mpsc::UnboundedSender<String>,
+    from_runtime_rx: &mut deno_core::futures::channel::mpsc::UnboundedReceiver<InspectorMsg>,
+) {
+    loop {
+        loop {
+            match from_runtime_rx.try_recv() {
+                Ok(msg) => {
+                    if ws.send(Message::Text(msg.content.into())).is_err() {
+                        return;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+
+        match ws.read() {
+            Ok(msg) => {
+                if msg.is_close() {
+                    return;
+                }
+                if let Message::Text(text) = msg {
+                    if to_runtime_tx.unbounded_send(text.to_string()).is_err() {
+                        return;
+                    }
+                }
+            }
+            Err(tungstenite::Error::Io(e)) if e.kind() == ErrorKind::WouldBlock => {}
+            Err(tungstenite::Error::ConnectionClosed)
+            | Err(tungstenite::Error::AlreadyClosed) => return,
+            Err(_) => return,
+        }
+
+        thread::sleep(std::time::Duration::from_millis(5));
     }
 }
