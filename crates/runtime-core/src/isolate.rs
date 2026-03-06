@@ -18,6 +18,18 @@ pub struct IsolateConfig {
     /// Wall clock timeout per request in milliseconds (0 = unlimited).
     #[serde(default = "default_wall_clock")]
     pub wall_clock_timeout_ms: u64,
+
+    /// Optional V8 inspector protocol port. When set, this isolate exposes CDP on localhost.
+    #[serde(default)]
+    pub inspect_port: Option<u16>,
+
+    /// If true, waits for inspector session and breaks on next statement.
+    #[serde(default)]
+    pub inspect_brk: bool,
+
+    /// If true, inline source maps from eszip modules into loaded JS.
+    #[serde(default = "default_enable_source_maps")]
+    pub enable_source_maps: bool,
 }
 
 fn default_max_heap() -> usize {
@@ -32,12 +44,19 @@ fn default_wall_clock() -> u64 {
     60_000
 }
 
+fn default_enable_source_maps() -> bool {
+    true
+}
+
 impl Default for IsolateConfig {
     fn default() -> Self {
         Self {
             max_heap_size_bytes: default_max_heap(),
             cpu_time_limit_ms: default_cpu_time(),
             wall_clock_timeout_ms: default_wall_clock(),
+            inspect_port: None,
+            inspect_brk: false,
+            enable_source_maps: default_enable_source_maps(),
         }
     }
 }
@@ -108,6 +127,9 @@ mod tests {
         assert_eq!(config.max_heap_size_bytes, 128 * 1024 * 1024);
         assert_eq!(config.cpu_time_limit_ms, 50_000);
         assert_eq!(config.wall_clock_timeout_ms, 60_000);
+        assert_eq!(config.inspect_port, None);
+        assert!(!config.inspect_brk);
+        assert!(config.enable_source_maps);
     }
 
     #[test]
@@ -116,15 +138,21 @@ mod tests {
         assert_eq!(config.max_heap_size_bytes, 128 * 1024 * 1024);
         assert_eq!(config.cpu_time_limit_ms, 50_000);
         assert_eq!(config.wall_clock_timeout_ms, 60_000);
+        assert_eq!(config.inspect_port, None);
+        assert!(!config.inspect_brk);
+        assert!(config.enable_source_maps);
     }
 
     #[test]
     fn isolate_config_serde_custom() {
-        let json = r#"{"max_heap_size_bytes":999,"cpu_time_limit_ms":100,"wall_clock_timeout_ms":200}"#;
+        let json = r#"{"max_heap_size_bytes":999,"cpu_time_limit_ms":100,"wall_clock_timeout_ms":200,"inspect_port":9333,"inspect_brk":true,"enable_source_maps":false}"#;
         let config: IsolateConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.max_heap_size_bytes, 999);
         assert_eq!(config.cpu_time_limit_ms, 100);
         assert_eq!(config.wall_clock_timeout_ms, 200);
+        assert_eq!(config.inspect_port, Some(9333));
+        assert!(config.inspect_brk);
+        assert!(!config.enable_source_maps);
     }
 
     #[test]
@@ -134,6 +162,9 @@ mod tests {
         assert!(json.contains("\"max_heap_size_bytes\""));
         assert!(json.contains("\"cpu_time_limit_ms\""));
         assert!(json.contains("\"wall_clock_timeout_ms\""));
+        assert!(json.contains("\"inspect_port\""));
+        assert!(json.contains("\"inspect_brk\""));
+        assert!(json.contains("\"enable_source_maps\""));
     }
 
     #[test]
