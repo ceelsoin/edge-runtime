@@ -18,6 +18,7 @@ use tracing::{error, info, warn};
 use tungstenite::{Message, WebSocket};
 
 use runtime_core::extensions;
+use runtime_core::cpu_timer::CpuTimer;
 use runtime_core::isolate::{determine_root_specifier, IsolateConfig, IsolateHandle, IsolateRequest};
 use runtime_core::mem_check::{HeapLimitState, near_heap_limit_callback};
 use runtime_core::module_loader::EszipModuleLoader;
@@ -354,6 +355,9 @@ async fn run_isolate(
     info!("function '{}' isolate initialized, entering request loop", name);
     liveness_handle.mark_alive();
 
+    // Keep one CPU timer per isolate and reset it for each incoming request.
+    let mut cpu_timer = CpuTimer::new(config.cpu_time_limit_ms);
+
     // Request handling loop
     loop {
         tokio::select! {
@@ -373,6 +377,9 @@ async fn run_isolate(
 
                 // Track warm request timing
                 let warm_start_timer = std::time::Instant::now();
+
+                cpu_timer.reset();
+                cpu_timer.start();
 
                 // Generate unique execution ID for this request (for timer tracking)
                 let execution_id = uuid::Uuid::new_v4().to_string();
@@ -484,11 +491,15 @@ async fn run_isolate(
                     dispatch_result
                 };
                 let warm_duration_ms = warm_start_timer.elapsed().as_millis() as u64;
+                let cpu_duration_ms = cpu_timer.stop();
 
                 metrics.active_requests.fetch_sub(1, Ordering::Relaxed);
                 metrics
                     .total_warm_start_time_ms
                     .fetch_add(warm_duration_ms, Ordering::Relaxed);
+                metrics
+                    .total_cpu_time_ms
+                    .fetch_add(cpu_duration_ms, Ordering::Relaxed);
                 if result.is_err() {
                     metrics.total_errors.fetch_add(1, Ordering::Relaxed);
                 }

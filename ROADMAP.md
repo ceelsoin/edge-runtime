@@ -212,10 +212,10 @@ TODO (futuro): expor este evento como métrica por função (ex.: `heap_limit_te
 **Arquivo:** `crates/runtime-core/src/cpu_timer.rs`
 
 - [x] Adicionar método `reset` que zera `accumulated_ms` e `exceeded`
-- [ ] Chamar `reset()` antes de cada `dispatch_request`
+- [x] Chamar `reset()` antes de cada `dispatch_request`
 - [x] Adicionar teste cobrindo reuso do mesmo timer após reset
 
-**Status:** 🚧 Em progresso (2/3)
+**Status:** ✅ Concluído
 
 ---
 
