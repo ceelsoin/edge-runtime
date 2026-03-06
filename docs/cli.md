@@ -439,7 +439,7 @@ Bundles a JS/TS entrypoint and dependencies into a serialized package (ESZIP pac
 ### Usage
 
 ```bash
-deno-edge-runtime bundle --entrypoint <FILE> --output <FILE> [OPTIONS]
+deno-edge-runtime bundle --entrypoint <FILE> --output <FILE>
 ```
 
 ### Options
@@ -450,16 +450,12 @@ deno-edge-runtime bundle --entrypoint <FILE> --output <FILE> [OPTIONS]
 - `-o, --output <OUTPUT>`
   - Required.
   - Destination file path.
-- `-f, --format <FORMAT>`
-  - Default: `eszip`
-  - Accepted values: `eszip`, `snapshot`
 
 ### Behavior Notes
 
 - For TS-like entrypoints (`.ts`, `.mts`, `.cts`, `.tsx`):
   - If `deno` is available in `PATH`, runs `deno check` first.
   - If not available, falls back to syntax/module-graph validation only.
-- `snapshot` value is currently rejected at runtime with an explicit error.
 - Result is written as a serialized `BundlePackage` containing ESZIP bytes.
 - Supports `edge://assert/*` imports through internal rewrite/loader handling.
 
@@ -469,15 +465,6 @@ deno-edge-runtime bundle --entrypoint <FILE> --output <FILE> [OPTIONS]
 deno-edge-runtime bundle \
   --entrypoint ./examples/json-api/json-api.ts \
   --output ./bundles/eszip/json-api.eszip
-```
-
-Expected error for unsupported format:
-
-```bash
-deno-edge-runtime bundle \
-  --entrypoint ./examples/hello/hello.ts \
-  --output ./out.bin \
-  --format snapshot
 ```
 
 ## `watch`
@@ -708,4 +695,3 @@ Checks:
 
 - The CLI initializes tracing and V8 platform before dispatching subcommands.
 - Logs default to `info` level unless `--verbose` is used or `RUST_LOG` is explicitly configured.
-- Current snapshot bundling flag is intentionally documented but not functional yet.

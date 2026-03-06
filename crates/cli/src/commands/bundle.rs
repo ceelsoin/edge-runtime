@@ -22,11 +22,6 @@ pub struct BundleArgs {
     /// Output bundle file path
     #[arg(short, long)]
     output: String,
-
-    /// Bundle format: eszip (default) or snapshot
-    /// NOTE: Snapshot support requires deno_core improvements for dynamic snapshot loading
-    #[arg(short, long, default_value = "eszip")]
-    format: String,
 }
 
 /// A simple file-system loader for deno_graph.
@@ -180,22 +175,6 @@ async fn run_async(args: BundleArgs) -> Result<(), anyhow::Error> {
             run_syntax_check_for_files_async(&[entrypoint.clone()]).await?;
         }
     }
-
-    // Validate format
-    match args.format.as_str() {
-        "eszip" => {}
-        "snapshot" => {
-            return Err(anyhow::anyhow!(
-                "snapshot format not yet supported - deno_core needs improvements for dynamic snapshot loading. Use 'eszip' format instead."
-            ));
-        }
-        _ => {
-            return Err(anyhow::anyhow!(
-                "invalid format '{}', must be 'eszip' or 'snapshot'",
-                args.format
-            ))
-        }
-    };
 
     // 1. Build module graph
     let loader = FileLoader;

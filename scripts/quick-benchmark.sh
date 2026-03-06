@@ -2,7 +2,7 @@
 
 # Quick benchmark runner - assumes build and bundles already exist
 # For quick re-runs without rebuilding everything
-# Usage: ./scripts/quick-benchmark.sh [eszip|snapshot|both]
+# Usage: ./scripts/quick-benchmark.sh
 
 set -e
 
@@ -34,11 +34,9 @@ print_error() {
     echo -e "${RED}❌ $1${NC}"
 }
 
-# Parse arguments
-TEST_TYPE="${1:-both}"
-
-if [[ ! "$TEST_TYPE" =~ ^(eszip|snapshot|both)$ ]]; then
-    echo "Usage: $0 [eszip|snapshot|both]"
+if [[ $# -gt 0 ]]; then
+    echo "Usage: $0"
+    echo "This script runs ESZIP benchmark only."
     exit 1
 fi
 
@@ -84,26 +82,11 @@ trap cleanup EXIT
 
 START_TIME=$(date +%s)
 
-# Run tests
-if [[ "$TEST_TYPE" == "eszip" || "$TEST_TYPE" == "both" ]]; then
-    print_section "Running ESZIP benchmark..."
-    echo ""
-    bash "$SCRIPT_DIR/deploy-and-test-eszip.sh"
-    echo ""
-
-    if [[ "$TEST_TYPE" == "both" ]]; then
-        print_section "Waiting before next test..."
-        curl -s -X DELETE "http://localhost:9000/_internal/functions" 2>/dev/null || true
-        sleep 5
-    fi
-fi
-
-if [[ "$TEST_TYPE" == "snapshot" || "$TEST_TYPE" == "both" ]]; then
-    print_section "Running SNAPSHOT benchmark..."
-    echo ""
-    bash "$SCRIPT_DIR/deploy-and-test-snapshot.sh"
-    echo ""
-fi
+# Run test
+print_section "Running ESZIP benchmark..."
+echo ""
+bash "$SCRIPT_DIR/deploy-and-test-eszip.sh"
+echo ""
 
 END_TIME=$(date +%s)
 ELAPSED=$((END_TIME - START_TIME))

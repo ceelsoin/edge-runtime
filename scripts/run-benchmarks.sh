@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Master benchmark script - Build, bundle, deploy and test both ESZIP and SNAPSHOT formats
+# Master benchmark script - Build, bundle, deploy and test ESZIP format
 # Usage: ./scripts/run-benchmarks.sh
 
 set -e
@@ -40,7 +40,7 @@ print_header "🚀 DENO EDGE RUNTIME - COMPREHENSIVE BENCHMARKS"
 echo ""
 
 # Step 1: Build the project
-print_section "Step 1/5: Building the project..."
+print_section "Step 1/4: Building the project..."
 cd "$PROJECT_ROOT"
 
 if cargo build --release 2>&1 | tail -20; then
@@ -53,7 +53,7 @@ fi
 echo ""
 
 # Step 2: Bundle ESZIP
-print_section "Step 2/5: Bundling examples (ESZIP format)..."
+print_section "Step 2/4: Bundling examples (ESZIP format)..."
 if bash "$SCRIPT_DIR/bundle-eszip.sh"; then
     print_success "ESZIP bundles created"
 else
@@ -63,19 +63,8 @@ fi
 
 echo ""
 
-# Step 3: Bundle SNAPSHOT
-print_section "Step 3/5: Bundling examples (SNAPSHOT format)..."
-if bash "$SCRIPT_DIR/bundle-snapshot.sh"; then
-    print_success "SNAPSHOT bundles created"
-else
-    print_error "SNAPSHOT bundling failed"
-    exit 1
-fi
-
-echo ""
-
-# Step 4: Start server
-print_section "Step 4a/5: Starting deno-edge-runtime server..."
+# Step 3: Start server
+print_section "Step 3/4: Starting deno-edge-runtime server..."
 SERVER_PID=""
 
 # Kill any existing server
@@ -115,8 +104,8 @@ cleanup() {
 
 trap cleanup EXIT
 
-# Step 4b: Run ESZIP benchmark
-print_section "Step 4b/5: Running ESZIP benchmark..."
+# Step 4: Run ESZIP benchmark
+print_section "Step 4/4: Running ESZIP benchmark..."
 echo ""
 
 if bash "$SCRIPT_DIR/deploy-and-test-eszip.sh"; then
@@ -125,30 +114,6 @@ else
     print_error "ESZIP benchmark failed"
     exit 1
 fi
-
-echo ""
-echo "⏳ Waiting before SNAPSHOT test..."
-sleep 5
-
-# Clear metrics before snapshot test
-print_section "Clearing functions and metrics..."
-curl -s -X DELETE "http://localhost:9000/_internal/functions" 2>/dev/null || true
-sleep 2
-
-echo ""
-
-# Step 5: Run SNAPSHOT benchmark
-print_section "Step 5/5: Running SNAPSHOT benchmark..."
-echo ""
-
-if bash "$SCRIPT_DIR/deploy-and-test-snapshot.sh"; then
-    print_success "SNAPSHOT benchmark completed"
-else
-    print_error "SNAPSHOT benchmark failed"
-    exit 1
-fi
-
-echo ""
 
 # Calculate elapsed time
 END_TIME=$(date +%s)
@@ -159,16 +124,7 @@ echo ""
 echo "📈 Summary:"
 echo "   Total time: ${ELAPSED}s"
 echo "   ESZIP bundles: $PROJECT_ROOT/bundles/eszip"
-echo "   SNAPSHOT bundles: $PROJECT_ROOT/bundles/snapshot"
 echo "   Metrics log: /tmp/edge-runtime.log"
-echo ""
-
-# Display comparison instructions
-echo "📊 Comparison Notes:"
-echo "   - Cold Start: Time to initialize first request for each function"
-echo "   - Warm Start: Time for subsequent requests (function already loaded)"
-echo "   - SNAPSHOT format currently uses ESZIP with headers (awaiting deno_core)"
-echo "   - Full snapshot benefits will be visible once dynamic snapshot support is added"
 echo ""
 
 print_success "All benchmarks completed!"

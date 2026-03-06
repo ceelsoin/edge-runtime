@@ -106,17 +106,10 @@ The load test targets 7 representative examples:
 ### Quick Test (Existing Bundles)
 
 ```bash
-./scripts/quick-benchmark.sh both
+./scripts/quick-benchmark.sh
 ```
 
-Tests both ESZIP and snapshot formats without rebuilding.
-
-**Options**:
-```bash
-./scripts/quick-benchmark.sh eszip      # Only ESZIP
-./scripts/quick-benchmark.sh snapshot   # Only snapshot
-./scripts/quick-benchmark.sh both       # Both formats (default)
-```
+Runs ESZIP benchmark using existing bundles without rebuilding.
 
 ### Full Benchmark (Clean Build)
 
@@ -124,7 +117,7 @@ Tests both ESZIP and snapshot formats without rebuilding.
 ./scripts/run-benchmarks.sh
 ```
 
-Rebuilds, bundles, and tests everything. Takes ~2-3 minutes.
+Rebuilds, bundles, and tests ESZIP flow. Takes ~1-2 minutes.
 
 ### Manual Testing
 
@@ -208,15 +201,13 @@ Throughput:     ~80-120 req/s per VU
 Error Rate:     0%
 ```
 
-### ESZIP vs Snapshot (When Snapshot Support is Complete)
+### ESZIP Baseline Targets
 
-| Metric | ESZIP | Snapshot | Improvement |
-|--------|-------|----------|-------------|
-| Cold Start | 250ms | 100ms | 60% faster |
-| Warm Start | 15ms | 12ms | 20% faster |
-| Memory | ~50MB | ~80MB | Higher initial cost |
-
-*Note: Snapshot support pending deno_core improvements*
+| Metric | ESZIP |
+|--------|-------|
+| Cold Start | ~250-300ms |
+| Warm Start | ~10-20ms |
+| Memory | ~50MB |
 
 ## Metrics Endpoint
 
@@ -396,29 +387,14 @@ const EXAMPLES = [
 ];
 ```
 
-## Comparing Formats
+## Benchmark Workflow
 
-Once snapshot support is fully implemented:
+Run the quick ESZIP benchmark and inspect metrics:
 
 ```bash
-# Test only ESZIP
-./scripts/quick-benchmark.sh eszip
-
-# Test only snapshot
-./scripts/quick-benchmark.sh snapshot
-
-# Compare metrics
+./scripts/quick-benchmark.sh
 curl http://localhost:9000/_internal/metrics | jq '.functions[] | {name, metrics}'
 ```
-
-### Expected Comparison
-
-| Metric | ESZIP | Snapshot |
-|--------|-------|----------|
-| Setup time | ~250ms | ~100ms |
-| Request latency | ~15ms | ~12ms |
-| Memory per function | ~45MB | ~75MB |
-| Function count per host | ~50 | ~30 |
 
 ## Best Practices
 

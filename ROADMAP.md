@@ -389,45 +389,38 @@ Implementação atual:
 - Persistência do manifest resolvido em deploy/update e reaplicação em hot-reload
 - Recursos (`resources`) do manifest aplicados ao `IsolateConfig` na criação do isolate
 
-### 3.2 V8 Snapshot para Cold Start Rápido
-
-- [ ] Implementar `load_from_snapshot()` (atualmente TODO)
-- [ ] Validar versão do V8 no snapshot vs runtime
-- [ ] Benchmark de cold start: eszip vs snapshot
-- [ ] Meta: cold start < 50ms
-
-### 3.3 Streaming de Response Body
+### 3.2 Streaming de Response Body
 
 - [ ] Substituir `bytes::Bytes` por `hyper::body::Body` streaming
 - [ ] Suportar `ReadableStream` no response do user code
 - [ ] Permitir Server-Sent Events e chunked transfer
 
-### 3.4 Isolate Pooling / Reuse
+### 3.3 Isolate Pooling / Reuse
 
 - [ ] Pool de isolates quentes prontos para receber requests
 - [ ] Reutilizar isolate entre requests da mesma função
 - [ ] Pre-warm isolates para funções com alto tráfego
 - [ ] Evict LRU quando pool estiver cheio
 
-### 3.5 Hot-Reload de Certificado TLS
+### 3.4 Hot-Reload de Certificado TLS
 
 - [ ] Watch no cert/key file via `notify`
 - [ ] Rotacionar `TlsAcceptor` sem restart do servidor
 - [ ] Logar rotação com fingerprint do novo cert
 
-### 3.6 HTTP/3 (QUIC)
+### 3.5 HTTP/3 (QUIC)
 
 - [ ] Avaliar `quinn` ou `h3` crate
 - [ ] Suportar QUIC listeners em paralelo com TCP
 - [ ] ALPN negotiation para h2/h3
 
-### 3.7 Module Integrity (Assinatura de Bundles)
+### 3.6 Module Integrity (Assinatura de Bundles)
 
 - [ ] Assinar bundles eszip com HMAC-SHA256 ou Ed25519
 - [ ] Verificar assinatura no load antes de execução
 - [ ] Rejeitar bundles sem assinatura válida em modo produção
 
-### 3.8 Resolver Paths Hardcoded no CLI
+### 3.7 Resolver Paths Hardcoded no CLI
 
 **Ref:** AUDIT §3.4
 
@@ -678,7 +671,6 @@ Implementação atual:
 | Vulnerabilidades Altas | 0 |
 | Cobertura de testes de segurança | > 90% dos cenários listados |
 | Cold start (eszip) | < 200ms |
-| Cold start (snapshot) | < 50ms |
 | Max concurrent connections | 10.000+ estável |
 | Request timeout enforcement | 100% dos casos |
 | Memory limit enforcement | 100% dos casos |

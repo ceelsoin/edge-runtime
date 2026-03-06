@@ -1,16 +1,14 @@
 # Benchmark and Deployment Scripts
 
-This directory contains scripts for bundling, deploying, and load-testing the Deno Edge Runtime with different bundle formats.
+This directory contains scripts for bundling, deploying, and load-testing the Deno Edge Runtime using ESZIP bundles.
 
 ## Overview
 
 ### Bundle Scripts
 - **`bundle-eszip.sh`** - Bundle all examples in ESZIP format
-- **`bundle-snapshot.sh`** - Bundle all examples in SNAPSHOT format
 
 ### Deployment & Test Scripts
 - **`deploy-and-test-eszip.sh`** - Deploy ESZIP bundles and run k6 load tests
-- **`deploy-and-test-snapshot.sh`** - Deploy SNAPSHOT bundles and run k6 load tests
 - **`load-test.js`** - k6 load testing script (JavaScript)
 
 ### Automation Scripts
@@ -39,30 +37,21 @@ This directory contains scripts for bundling, deploying, and load-testing the De
 # Make scripts executable
 chmod +x ./scripts/*.sh
 
-# Run complete benchmark (build + bundle + deploy + test both formats)
+# Run complete benchmark (build + bundle + deploy + test ESZIP)
 ./scripts/run-benchmarks.sh
 ```
 
 This will:
 1. Build the release binary
 2. Bundle all examples in ESZIP format
-3. Bundle all examples in SNAPSHOT format
-4. Start the server
-5. Deploy and test ESZIP bundles with k6
-6. Deploy and test SNAPSHOT bundles with k6
-7. Display metrics and performance summary
+3. Start the server
+4. Deploy and test ESZIP bundles with k6
+5. Display metrics and performance summary
 
 ### Quick Re-test (no rebuild)
 
 ```bash
-# Test both formats
-./scripts/quick-benchmark.sh both
-
-# Test only ESZIP
-./scripts/quick-benchmark.sh eszip
-
-# Test only SNAPSHOT
-./scripts/quick-benchmark.sh snapshot
+./scripts/quick-benchmark.sh
 ```
 
 ### Individual Steps
@@ -73,9 +62,8 @@ This will:
 # Build the project
 cargo build --release
 
-# Bundle examples (one or both)
+# Bundle examples
 ./scripts/bundle-eszip.sh
-./scripts/bundle-snapshot.sh
 ```
 
 #### 2. Start the Server
@@ -91,9 +79,6 @@ In a new terminal:
 ```bash
 # Test ESZIP format
 ./scripts/deploy-and-test-eszip.sh
-
-# Or test SNAPSHOT format
-./scripts/deploy-and-test-snapshot.sh
 ```
 
 ## Load Test Details
@@ -153,23 +138,13 @@ The server exposes metrics at `http://localhost:9000/_internal/metrics`:
 - **total_requests**: Total requests processed
 - **total_errors**: Number of failed requests
 
-## Comparing Formats
-
-### ESZIP vs SNAPSHOT
-
-Currently, both formats produce similar performance because snapshots require dynamic loading support from deno_core. Once that's implemented:
+## Bundle Format
 
 **ESZIP (Current)**:
 - ✅ Modules loaded from archive at runtime
 - ✅ Better compatibility
 - ⚠️ Extension initialization happens per-function
 - Average cold start: ~250-300ms
-
-**SNAPSHOT (Future)**:
-- ✅ Pre-initialized state captured in snapshot
-- ✅ Faster startup (skip extension init)
-- ✅ Better warm start performance
-- Expected cold start: ~100-150ms (when supported)
 
 ## Troubleshooting
 
@@ -209,7 +184,7 @@ curl http://localhost:9000/_internal/functions
 
 After running benchmarks:
 
-- **Bundles**: `./bundles/eszip/` and `./bundles/snapshot/`
+- **Bundles**: `./bundles/eszip/`
 - **Server Log**: `/tmp/edge-runtime.log`
 - **k6 Results**: Displayed in console (HTML report optional with `-o html`)
 
@@ -224,8 +199,10 @@ Edit `load-test.js` to change:
 
 ### Generate HTML Report
 
+Use k6 directly to export summaries and reports:
+
 ```bash
-./scripts/quick-benchmark.sh both --out html --summary-export=/tmp/summary.json
+k6 run scripts/load-test.js --summary-export=/tmp/summary.json
 ```
 
 ### Run Specific Examples Only
@@ -244,7 +221,7 @@ const EXAMPLES = [
 1. **Increase cache locality**: More warm starts = better amortized performance
 2. **Monitor cold starts**: Look for patterns in initialization time
 3. **Profile extensions**: Check which extensions take longest to initialize
-4. **Snapshot usage**: Once enabled, will significantly reduce cold start time
+4. **Bundle size control**: Keep dependencies lean to reduce startup overhead
 
 ## See Also
 
