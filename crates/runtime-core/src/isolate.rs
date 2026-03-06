@@ -1,3 +1,6 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use anyhow::Error;
 use deno_core::ModuleSpecifier;
 use tokio::sync::{mpsc, oneshot};
@@ -85,14 +88,28 @@ pub struct IsolateHandle {
     pub shutdown: CancellationToken,
     /// Unique ID for this isolate instance.
     pub id: Uuid,
+    /// Flag indicating if the isolate is still alive.
+    /// Set to false when isolate thread exits (panic, error, or normal shutdown).
+    pub alive: Arc<AtomicBool>,
 }
 
 impl IsolateHandle {
+    /// Check if the isolate is still alive and capable of handling requests.
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::SeqCst)
+    }
+
     /// Send a request and await the response.
+    /// Returns an error if the isolate is not alive or the channel is closed.
     pub async fn send_request(
         &self,
         request: http::Request<bytes::Bytes>,
     ) -> Result<http::Response<bytes::Bytes>, Error> {
+        // Check if isolate is alive before attempting to send
+        if !self.is_alive() {
+            return Err(anyhow::anyhow!("isolate is not alive (crashed or shutdown)"));
+        }
+
         let (response_tx, response_rx) = oneshot::channel();
 
         self.request_tx
@@ -103,6 +120,11 @@ impl IsolateHandle {
             .map_err(|_| anyhow::anyhow!("isolate request channel closed"))?;
 
         response_rx.await?
+    }
+
+    /// Mark the isolate as dead. Called when the isolate thread exits.
+    pub fn mark_dead(&self) {
+        self.alive.store(false, Ordering::SeqCst);
     }
 }
 

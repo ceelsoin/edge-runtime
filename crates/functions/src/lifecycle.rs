@@ -17,6 +17,7 @@ use tungstenite::{Message, WebSocket};
 
 use runtime_core::extensions;
 use runtime_core::isolate::{determine_root_specifier, IsolateConfig, IsolateHandle, IsolateRequest};
+use runtime_core::mem_check::{HeapLimitState, near_heap_limit_callback};
 use runtime_core::module_loader::EszipModuleLoader;
 use runtime_core::permissions::create_permissions_with_ssrf_protection;
 
@@ -78,12 +79,17 @@ pub async fn create_function(
     // Create the request channel
     let (request_tx, request_rx) = mpsc::unbounded_channel::<IsolateRequest>();
 
+    // Create the alive flag - starts as true, set to false when isolate exits
+    let alive = Arc::new(AtomicBool::new(true));
+    let alive_for_thread = alive.clone();
+
     // Build the IsolateHandle
     let shutdown = parent_shutdown.child_token();
     let handle = IsolateHandle {
         request_tx,
         shutdown: shutdown.clone(),
         id: uuid::Uuid::new_v4(),
+        alive,
     };
 
     // Create the inspector stop flag on the main thread so destroy_function
@@ -131,6 +137,10 @@ pub async fn create_function(
                     inspector_stop_for_thread,
                 ))
             }));
+
+            // Mark isolate as dead regardless of how it exited
+            alive_for_thread.store(false, Ordering::SeqCst);
+
             match result {
                 Ok(res) => match res {
                     Ok(()) => info!("isolate '{}' exited cleanly", isolate_name),
@@ -174,21 +184,21 @@ async fn run_isolate(
     let cold_start_timer = std::time::Instant::now();
 
     // Try to load from snapshot first, fall back to eszip if needed
-    let mut js_runtime = match bundle_format {
+    let (mut js_runtime, heap_limit_state_ptr) = match bundle_format {
         BundleFormat::Snapshot => {
             if v8_version == deno_core::v8::VERSION_STRING {
                 if let Some(snapshot_data) = snapshot_bytes {
                     info!("loading '{}' from V8 snapshot", name);
                     match load_from_snapshot(&snapshot_data, &config).await {
-                        Ok(rt) => rt,
+                        Ok(rt) => (rt, None),
                         Err(e) => {
                             warn!("failed to load snapshot: {}, trying fallback eszip", e);
-                            load_from_eszip_with_init(&eszip, &root_specifier, &config).await?
+                            load_from_eszip_with_init(&eszip, &root_specifier, &config, &name).await?
                         }
                     }
                 } else {
                     info!("snapshot data missing, loading from eszip");
-                    load_from_eszip_with_init(&eszip, &root_specifier, &config).await?
+                    load_from_eszip_with_init(&eszip, &root_specifier, &config, &name).await?
                 }
             } else {
                 warn!(
@@ -196,10 +206,10 @@ async fn run_isolate(
                     v8_version,
                     deno_core::v8::VERSION_STRING
                 );
-                load_from_eszip_with_init(&eszip, &root_specifier, &config).await?
+                load_from_eszip_with_init(&eszip, &root_specifier, &config, &name).await?
             }
         }
-        BundleFormat::Eszip => load_from_eszip_with_init(&eszip, &root_specifier, &config).await?,
+        BundleFormat::Eszip => load_from_eszip_with_init(&eszip, &root_specifier, &config, &name).await?,
     };
 
     let _inspector_guard = if let Some(port) = config.inspect_port {
@@ -267,7 +277,110 @@ async fn run_isolate(
 
                 // Track warm request timing
                 let warm_start_timer = std::time::Instant::now();
-                let result = handler::dispatch_request(&mut js_runtime, req.request).await;
+
+                // Generate unique execution ID for this request (for timer tracking)
+                let execution_id = uuid::Uuid::new_v4().to_string();
+
+                // Start execution context (track timers/intervals for this request)
+                if let Err(e) = js_runtime.execute_script(
+                    "edge-internal:///start_execution.js",
+                    deno_core::FastString::from(format!(
+                        r#"globalThis.__edgeRuntime.startExecution("{}");"#,
+                        execution_id
+                    )),
+                ) {
+                    warn!("failed to start execution context: {}", e);
+                }
+
+                let result = if config.wall_clock_timeout_ms > 0 {
+                    // Get thread-safe handle for the watchdog thread
+                    let v8_handle = js_runtime.v8_isolate().thread_safe_handle();
+                    let timeout_ms = config.wall_clock_timeout_ms;
+                    let terminated = Arc::new(AtomicBool::new(false));
+                    let watchdog_terminated = terminated.clone();
+                    let request_completed = Arc::new(AtomicBool::new(false));
+                    let watchdog_completed = request_completed.clone();
+
+                    // Spawn watchdog thread that will forcefully terminate V8 execution on timeout
+                    let watchdog = std::thread::spawn(move || {
+                        let deadline = std::time::Instant::now()
+                            + std::time::Duration::from_millis(timeout_ms);
+
+                        // Poll periodically until deadline or request completes
+                        while std::time::Instant::now() < deadline {
+                            if watchdog_completed.load(Ordering::SeqCst) {
+                                return; // Request completed before timeout
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+
+                        // Deadline reached - terminate V8 execution if request still running
+                        if !watchdog_completed.load(Ordering::SeqCst) {
+                            if v8_handle.terminate_execution() {
+                                watchdog_terminated.store(true, Ordering::SeqCst);
+                            }
+                        }
+                    });
+
+                    // Execute the request (may be terminated by watchdog)
+                    let dispatch_result = handler::dispatch_request(&mut js_runtime, req.request).await;
+
+                    // Signal watchdog to stop and wait for it
+                    request_completed.store(true, Ordering::SeqCst);
+                    let _ = watchdog.join();
+
+                    // Check if V8 was forcefully terminated
+                    if terminated.load(Ordering::SeqCst) {
+                        // Reset termination state so isolate can be reused
+                        js_runtime.v8_isolate().cancel_terminate_execution();
+
+                        // Now clear timers/intervals created by this execution
+                        // (must be after cancel_terminate_execution so we can execute JS)
+                        if let Err(e) = js_runtime.execute_script(
+                            "edge-internal:///clear_execution.js",
+                            deno_core::FastString::from(format!(
+                                r#"globalThis.__edgeRuntime.clearExecutionTimers("{}");"#,
+                                execution_id
+                            )),
+                        ) {
+                            warn!("failed to clear execution timers: {}", e);
+                        }
+
+                        warn!(
+                            "function '{}' request forcefully terminated after {}ms",
+                            name, config.wall_clock_timeout_ms
+                        );
+                        Err(anyhow::anyhow!("request execution timeout - forcefully terminated"))
+                    } else {
+                        // End execution context normally (cleanup tracking, timers keep running)
+                        if let Err(e) = js_runtime.execute_script(
+                            "edge-internal:///end_execution.js",
+                            deno_core::FastString::from(format!(
+                                r#"globalThis.__edgeRuntime.endExecution("{}");"#,
+                                execution_id
+                            )),
+                        ) {
+                            warn!("failed to end execution context: {}", e);
+                        }
+                        dispatch_result
+                    }
+                } else {
+                    // No timeout configured - execute directly
+                    let dispatch_result = handler::dispatch_request(&mut js_runtime, req.request).await;
+
+                    // End execution context
+                    if let Err(e) = js_runtime.execute_script(
+                        "edge-internal:///end_execution.js",
+                        deno_core::FastString::from(format!(
+                            r#"globalThis.__edgeRuntime.endExecution("{}");"#,
+                            execution_id
+                        )),
+                    ) {
+                        warn!("failed to end execution context: {}", e);
+                    }
+
+                    dispatch_result
+                };
                 let warm_duration_ms = warm_start_timer.elapsed().as_millis() as u64;
 
                 metrics.active_requests.fetch_sub(1, Ordering::Relaxed);
@@ -288,6 +401,20 @@ async fn run_isolate(
                         pump_v8_message_loop: true,
                     })
                     .await;
+
+                // Check if heap limit was exceeded (via near-heap-limit callback)
+                if let Some(state_ptr) = heap_limit_state_ptr {
+                    // Safety: we created this pointer and it's valid until we drop it
+                    let state = unsafe { &*state_ptr };
+                    if state.should_terminate.load(Ordering::SeqCst) {
+                        error!(
+                            "function '{}' exceeded heap memory limit, terminating isolate",
+                            name
+                        );
+                        metrics.total_errors.fetch_add(1, Ordering::Relaxed);
+                        break;
+                    }
+                }
             }
             _ = shutdown.cancelled() => {
                 info!("isolate '{}' received shutdown signal", name);
@@ -302,6 +429,12 @@ async fn run_isolate(
     // listener thread, which exits promptly (pump_websocket also checks the
     // stop flag on every iteration).
     drop(js_runtime);
+
+    // Clean up heap limit state if allocated
+    if let Some(state_ptr) = heap_limit_state_ptr {
+        // Safety: we allocated this with Box::into_raw, now reclaim it
+        let _ = unsafe { Box::from_raw(state_ptr) };
+    }
 
     Ok(())
 }
@@ -326,11 +459,13 @@ async fn load_from_snapshot(
 }
 
 /// Load a JsRuntime from an eszip bundle and initialize it completely.
+/// Returns the runtime and an optional pointer to HeapLimitState (if heap limit is configured).
 async fn load_from_eszip_with_init(
     eszip: &Arc<eszip::EszipV2>,
     root_specifier: &deno_core::ModuleSpecifier,
     config: &IsolateConfig,
-) -> Result<JsRuntime, Error> {
+    function_name: &str,
+) -> Result<(JsRuntime, Option<*mut HeapLimitState>), Error> {
     // Set up V8 heap limits
     let create_params = if config.max_heap_size_bytes > 0 {
         Some(deno_core::v8::CreateParams::default().heap_limits(0, config.max_heap_size_bytes))
@@ -353,6 +488,24 @@ async fn load_from_eszip_with_init(
     extensions::set_extension_transpiler(&mut runtime_opts);
 
     let mut js_runtime = JsRuntime::new(runtime_opts);
+
+    // Register near-heap-limit callback if heap limit is configured
+    let heap_limit_state_ptr = if config.max_heap_size_bytes > 0 {
+        let state = Box::new(HeapLimitState::new(
+            config.max_heap_size_bytes,
+            function_name.to_string(),
+        ));
+        let state_ptr = Box::into_raw(state);
+
+        js_runtime.v8_isolate().add_near_heap_limit_callback(
+            near_heap_limit_callback,
+            state_ptr as *mut std::ffi::c_void,
+        );
+
+        Some(state_ptr)
+    } else {
+        None
+    };
 
     // Put permissions into the op_state for extensions
     {
@@ -386,7 +539,7 @@ async fn load_from_eszip_with_init(
 
     eval_result.await?;
 
-    Ok(js_runtime)
+    Ok((js_runtime, heap_limit_state_ptr))
 }
 
 fn start_inspector_server(

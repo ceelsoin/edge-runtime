@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 /// Tracks heap memory usage for an isolate and enforces limits.
 pub struct MemCheck {
@@ -21,6 +21,76 @@ impl MemCheck {
 
     pub fn limit_bytes(&self) -> usize {
         self.limit_bytes
+    }
+}
+
+/// State for the near-heap-limit callback.
+/// This is passed as data pointer to the V8 callback.
+pub struct HeapLimitState {
+    /// Number of times the callback has been invoked.
+    pub callback_count: AtomicUsize,
+    /// Maximum heap size to allow (in bytes).
+    pub max_heap_bytes: usize,
+    /// Name of the function (for logging).
+    pub function_name: String,
+    /// Flag indicating the isolate should terminate due to memory.
+    pub should_terminate: std::sync::atomic::AtomicBool,
+}
+
+impl HeapLimitState {
+    pub fn new(max_heap_bytes: usize, function_name: String) -> Self {
+        Self {
+            callback_count: AtomicUsize::new(0),
+            max_heap_bytes,
+            function_name,
+            should_terminate: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
+
+/// Near heap limit callback for V8.
+///
+/// Called when V8 is about to exceed the heap limit. The callback can:
+/// 1. Return a larger limit to allow more memory (first call - give a last chance)
+/// 2. Return the same limit to trigger OOM (second call - terminate)
+///
+/// # Safety
+/// This function is called from V8's allocator and must be careful with allocations.
+pub extern "C" fn near_heap_limit_callback(
+    data: *mut std::ffi::c_void,
+    current_heap_limit: usize,
+    _initial_heap_limit: usize,
+) -> usize {
+    // Safety: data is a raw pointer to HeapLimitState that we created
+    let state = unsafe { &*(data as *const HeapLimitState) };
+    let count = state.callback_count.fetch_add(1, Ordering::SeqCst);
+
+    if count == 0 {
+        // First call - log warning and give a small extension (10% more)
+        let extension = current_heap_limit / 10;
+        let new_limit = current_heap_limit + extension;
+
+        // Use eprintln as tracing might allocate
+        eprintln!(
+            "WARN: function '{}' approaching heap limit ({} bytes used, limit {}). Allowing {} more bytes.",
+            state.function_name,
+            current_heap_limit,
+            state.max_heap_bytes,
+            extension
+        );
+
+        new_limit
+    } else {
+        // Second call - memory is still growing, mark for termination
+        state.should_terminate.store(true, Ordering::SeqCst);
+
+        eprintln!(
+            "ERROR: function '{}' exceeded heap limit after extension. Marking for termination.",
+            state.function_name
+        );
+
+        // Return same limit to trigger V8 OOM handling
+        current_heap_limit
     }
 }
 

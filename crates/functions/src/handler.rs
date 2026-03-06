@@ -25,6 +25,246 @@ pub fn inject_request_bridge(js_runtime: &mut JsRuntime) -> Result<(), Error> {
                 registerHandler(fn) {
                     this.handler = fn;
                 },
+
+                // Execution context tracking for resource cleanup
+                _currentExecutionId: null,
+                _timerRegistry: new Map(),       // executionId -> Set<timerId>
+                _intervalRegistry: new Map(),    // executionId -> Set<intervalId>
+                _abortRegistry: new Map(),       // executionId -> Set<AbortController>
+                _promiseRegistry: new Map(),     // executionId -> Set<{promise, reject}>
+
+                startExecution(executionId) {
+                    this._currentExecutionId = executionId;
+                    this._timerRegistry.set(executionId, new Set());
+                    this._intervalRegistry.set(executionId, new Set());
+                    this._abortRegistry.set(executionId, new Set());
+                    this._promiseRegistry.set(executionId, new Set());
+                },
+
+                endExecution(executionId) {
+                    this._timerRegistry.delete(executionId);
+                    this._intervalRegistry.delete(executionId);
+                    this._abortRegistry.delete(executionId);
+                    this._promiseRegistry.delete(executionId);
+                    if (this._currentExecutionId === executionId) {
+                        this._currentExecutionId = null;
+                    }
+                },
+
+                clearExecutionTimers(executionId) {
+                    // Clear setTimeout timers
+                    const timers = this._timerRegistry.get(executionId);
+                    if (timers) {
+                        for (const id of timers) {
+                            globalThis.__originalClearTimeout(id);
+                        }
+                    }
+
+                    // Clear setInterval intervals
+                    const intervals = this._intervalRegistry.get(executionId);
+                    if (intervals) {
+                        for (const id of intervals) {
+                            globalThis.__originalClearInterval(id);
+                        }
+                    }
+
+                    // Abort pending fetch requests
+                    const abortControllers = this._abortRegistry.get(executionId);
+                    if (abortControllers) {
+                        for (const controller of abortControllers) {
+                            try {
+                                controller.abort(new Error('Request cancelled due to execution timeout'));
+                            } catch (e) {
+                                // Ignore abort errors
+                            }
+                        }
+                    }
+
+                    // Reject pending tracked promises
+                    const promises = this._promiseRegistry.get(executionId);
+                    if (promises) {
+                        const timeoutError = new Error('Promise cancelled due to execution timeout');
+                        for (const entry of promises) {
+                            try {
+                                if (entry.reject) {
+                                    entry.reject(timeoutError);
+                                }
+                            } catch (e) {
+                                // Ignore rejection errors
+                            }
+                        }
+                    }
+
+                    // Cleanup registries
+                    this._timerRegistry.delete(executionId);
+                    this._intervalRegistry.delete(executionId);
+                    this._abortRegistry.delete(executionId);
+                    this._promiseRegistry.delete(executionId);
+                    if (this._currentExecutionId === executionId) {
+                        this._currentExecutionId = null;
+                    }
+                },
+
+                // Helper to track an AbortController for the current execution
+                _trackAbortController(controller) {
+                    const execId = this._currentExecutionId;
+                    if (execId) {
+                        const controllers = this._abortRegistry.get(execId);
+                        if (controllers) controllers.add(controller);
+                    }
+                    return controller;
+                },
+
+                // Helper to untrack an AbortController
+                _untrackAbortController(controller) {
+                    for (const [, controllers] of this._abortRegistry) {
+                        controllers.delete(controller);
+                    }
+                },
+
+                // Helper to track a promise for the current execution
+                _trackPromise(promise, reject) {
+                    const execId = this._currentExecutionId;
+                    if (execId) {
+                        const entry = { promise, reject };
+                        const promises = this._promiseRegistry.get(execId);
+                        if (promises) {
+                            promises.add(entry);
+                            // Auto-remove when promise settles
+                            promise.finally(() => {
+                                promises.delete(entry);
+                            }).catch(() => {});
+                        }
+                    }
+                    return promise;
+                },
+            };
+
+            // Store original functions
+            globalThis.__originalSetTimeout = globalThis.setTimeout;
+            globalThis.__originalSetInterval = globalThis.setInterval;
+            globalThis.__originalClearTimeout = globalThis.clearTimeout;
+            globalThis.__originalClearInterval = globalThis.clearInterval;
+            globalThis.__originalFetch = globalThis.fetch;
+            globalThis.__originalQueueMicrotask = globalThis.queueMicrotask;
+
+            // Wrap setTimeout to track by execution id
+            globalThis.setTimeout = function(fn, delay, ...args) {
+                const timerId = globalThis.__originalSetTimeout(function() {
+                    // Remove from registry when timer fires
+                    const execId = globalThis.__edgeRuntime._currentExecutionId;
+                    if (execId) {
+                        const timers = globalThis.__edgeRuntime._timerRegistry.get(execId);
+                        if (timers) timers.delete(timerId);
+                    }
+                    // Call original callback
+                    if (typeof fn === 'function') {
+                        fn(...args);
+                    } else {
+                        // Handle string argument (eval-style, rare)
+                        eval(fn);
+                    }
+                }, delay);
+
+                const execId = globalThis.__edgeRuntime._currentExecutionId;
+                if (execId) {
+                    const timers = globalThis.__edgeRuntime._timerRegistry.get(execId);
+                    if (timers) timers.add(timerId);
+                }
+                return timerId;
+            };
+
+            // Wrap setInterval to track by execution id
+            globalThis.setInterval = function(fn, interval, ...args) {
+                const intervalId = globalThis.__originalSetInterval(fn, interval, ...args);
+                const execId = globalThis.__edgeRuntime._currentExecutionId;
+                if (execId) {
+                    const intervals = globalThis.__edgeRuntime._intervalRegistry.get(execId);
+                    if (intervals) intervals.add(intervalId);
+                }
+                return intervalId;
+            };
+
+            // Wrap clearTimeout to remove from registry
+            globalThis.clearTimeout = function(id) {
+                if (typeof id === 'number') {
+                    for (const [, timers] of globalThis.__edgeRuntime._timerRegistry) {
+                        timers.delete(id);
+                    }
+                }
+                return globalThis.__originalClearTimeout(id);
+            };
+
+            // Wrap clearInterval to remove from registry
+            globalThis.clearInterval = function(id) {
+                if (typeof id === 'number') {
+                    for (const [, intervals] of globalThis.__edgeRuntime._intervalRegistry) {
+                        intervals.delete(id);
+                    }
+                }
+                return globalThis.__originalClearInterval(id);
+            };
+
+            // Wrap fetch to track with AbortController
+            globalThis.fetch = function(input, init = {}) {
+                const execId = globalThis.__edgeRuntime._currentExecutionId;
+
+                // If no execution context, just call original fetch
+                if (!execId) {
+                    return globalThis.__originalFetch(input, init);
+                }
+
+                // Create AbortController if not provided
+                let controller;
+                let signal = init.signal;
+
+                if (!signal) {
+                    controller = new AbortController();
+                    signal = controller.signal;
+                    globalThis.__edgeRuntime._trackAbortController(controller);
+                } else if (signal.aborted) {
+                    // Already aborted, just call original
+                    return globalThis.__originalFetch(input, init);
+                } else {
+                    // User provided signal, wrap it with our controller
+                    controller = new AbortController();
+                    const userSignal = signal;
+
+                    // If user signal aborts, abort our controller too
+                    userSignal.addEventListener('abort', () => {
+                        controller.abort(userSignal.reason);
+                    });
+
+                    signal = controller.signal;
+                    globalThis.__edgeRuntime._trackAbortController(controller);
+                }
+
+                const fetchPromise = globalThis.__originalFetch(input, { ...init, signal });
+
+                // Untrack controller when fetch completes (success or error)
+                fetchPromise.finally(() => {
+                    globalThis.__edgeRuntime._untrackAbortController(controller);
+                }).catch(() => {});
+
+                return fetchPromise;
+            };
+
+            // Wrap queueMicrotask to track execution context
+            // Note: Microtasks cannot be cancelled, but we track them for visibility
+            globalThis.queueMicrotask = function(callback) {
+                const execId = globalThis.__edgeRuntime._currentExecutionId;
+
+                return globalThis.__originalQueueMicrotask(function() {
+                    // Microtasks run in the context they were queued
+                    // We can't cancel them, but we can skip execution if context was cleared
+                    const currentExecId = globalThis.__edgeRuntime._currentExecutionId;
+
+                    // If the execution context changed or was cleared, still run
+                    // (microtasks are atomic and should complete)
+                    if (typeof callback === 'function') {
+                        callback();
+                    }
+                });
             };
 
             // Override Deno.serve to capture the handler

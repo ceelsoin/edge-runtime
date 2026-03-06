@@ -59,6 +59,14 @@ impl CpuTimer {
     pub fn limit_ms(&self) -> u64 {
         self.limit_ms
     }
+
+    /// Reset the timer for a new request.
+    /// Clears accumulated time and exceeded flag.
+    pub fn reset(&mut self) {
+        self.started_at = None;
+        self.accumulated_ms = 0;
+        self.exceeded.store(false, Ordering::Relaxed);
+    }
 }
 
 /// Wall-clock timeout guard for a single request.
@@ -173,5 +181,53 @@ mod tests {
         thread::sleep(Duration::from_millis(50));
         let r2 = guard.remaining();
         assert!(r2 < r1);
+    }
+
+    #[test]
+    fn cpu_timer_reset_clears_accumulated() {
+        let mut timer = CpuTimer::new(10_000);
+        timer.start();
+        thread::sleep(Duration::from_millis(30));
+        timer.stop();
+        assert!(timer.accumulated_ms() >= 20);
+
+        timer.reset();
+        assert_eq!(timer.accumulated_ms(), 0);
+        assert!(!timer.is_exceeded());
+    }
+
+    #[test]
+    fn cpu_timer_reset_clears_exceeded_flag() {
+        let mut timer = CpuTimer::new(10); // Very low limit
+        let flag = timer.exceeded_flag();
+
+        timer.start();
+        thread::sleep(Duration::from_millis(30));
+        timer.stop();
+        assert!(timer.is_exceeded());
+        assert!(flag.load(Ordering::Relaxed));
+
+        timer.reset();
+        assert!(!timer.is_exceeded());
+        assert!(!flag.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn cpu_timer_usable_after_reset() {
+        let mut timer = CpuTimer::new(10); // Very low limit
+
+        // First run - exceed limit
+        timer.start();
+        thread::sleep(Duration::from_millis(30));
+        timer.stop();
+        assert!(timer.is_exceeded());
+
+        // Reset and use again
+        timer.reset();
+        timer.start();
+        thread::sleep(Duration::from_millis(5));
+        timer.stop();
+        // Should not be exceeded with only 5ms
+        assert!(!timer.is_exceeded());
     }
 }

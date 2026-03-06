@@ -54,16 +54,21 @@ impl FunctionRegistry {
     }
 
     /// Get a handle to route a request to.
+    /// Returns None if function doesn't exist, isn't running, or the isolate is dead.
     pub fn get_handle(
         &self,
         name: &str,
     ) -> Option<runtime_core::isolate::IsolateHandle> {
         self.functions.get(name).and_then(|entry| {
             if entry.status == FunctionStatus::Running {
-                entry.isolate_handle.clone()
-            } else {
-                None
+                // Also check if isolate is still alive (hasn't panicked or exited)
+                if let Some(ref handle) = entry.isolate_handle {
+                    if handle.is_alive() {
+                        return Some(handle.clone());
+                    }
+                }
             }
+            None
         })
     }
 
