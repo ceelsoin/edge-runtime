@@ -2,6 +2,7 @@ pub mod admin_router;
 pub mod body_limits;
 pub mod graceful;
 pub mod ingress_router;
+pub mod middleware;
 pub mod router;
 pub mod service;
 pub mod tls;
@@ -130,7 +131,11 @@ pub async fn run_dual_server(
         config.admin.api_key.clone(),
         config.admin.body_limits,
     );
-    let ingress_router = IngressRouter::new(registry.clone(), config.ingress.body_limits);
+    let ingress_router = IngressRouter::new(
+        registry.clone(),
+        config.ingress.body_limits,
+        config.ingress.rate_limit_rps,
+    );
 
     // Spawn admin listener
     let admin_shutdown = shutdown.clone();
@@ -452,7 +457,7 @@ pub async fn run_server(
     registry: Arc<FunctionRegistry>,
     shutdown: CancellationToken,
 ) -> Result<(), Error> {
-    let router = router::Router::new(registry, config.body_limits);
+    let router = router::Router::new(registry, config.body_limits, config.rate_limit_rps);
     let svc = service::EdgeService::new(router);
 
     let listener = TcpListener::bind(config.addr).await?;

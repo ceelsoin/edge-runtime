@@ -241,9 +241,11 @@ TODO (futuro): expor este evento como métrica por função (ex.: `heap_limit_te
 **Crate:** `server`
 **Arquivo:** `crates/server/src/lib.rs`
 
-- [ ] Aplicar `RateLimitLayer` da middleware ao serviço HTTP se `rate_limit_rps` configurado
-- [ ] Retornar `429 Too Many Requests` quando exceder
-- [ ] Adicionar header `Retry-After` na resposta 429
+- [x] Aplicar `RateLimitLayer` da middleware ao serviço HTTP se `rate_limit_rps` configurado
+- [x] Retornar `429 Too Many Requests` quando exceder
+- [x] Adicionar header `Retry-After` na resposta 429
+
+**Status:** ✅ Concluído
 
 ---
 

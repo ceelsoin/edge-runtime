@@ -16,6 +16,7 @@ use crate::body_limits::{
     check_content_length, check_response_body_size, collect_body_with_limit,
     payload_too_large_response, BodyLimitError, BodyLimitsConfig,
 };
+use crate::middleware::{RateLimitLayer, rate_limit_layer, rate_limited_response};
 use crate::router::{is_valid_function_name, json_response};
 
 type BoxBody = Full<Bytes>;
@@ -28,14 +29,20 @@ type BoxBody = Full<Bytes>;
 pub struct IngressRouter {
     registry: Arc<FunctionRegistry>,
     body_limits: BodyLimitsConfig,
+    rate_limiter: Option<RateLimitLayer>,
 }
 
 impl IngressRouter {
     /// Create a new ingress router.
-    pub fn new(registry: Arc<FunctionRegistry>, body_limits: BodyLimitsConfig) -> Self {
+    pub fn new(
+        registry: Arc<FunctionRegistry>,
+        body_limits: BodyLimitsConfig,
+        rate_limit_rps: Option<u64>,
+    ) -> Self {
         Self {
             registry,
             body_limits,
+            rate_limiter: rate_limit_rps.map(rate_limit_layer),
         }
     }
 
@@ -44,6 +51,12 @@ impl IngressRouter {
         &self,
         req: Request<hyper::body::Incoming>,
     ) -> Result<Response<BoxBody>, Infallible> {
+        if let Some(limiter) = &self.rate_limiter {
+            if let Some(retry_after_secs) = limiter.check_limit() {
+                return Ok(rate_limited_response(retry_after_secs));
+            }
+        }
+
         let path = req.uri().path();
 
         // Reject /_internal/* on ingress port
@@ -169,6 +182,8 @@ impl IngressRouter {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn test_internal_path_detection() {
         // Test the path detection logic
@@ -238,5 +253,12 @@ mod tests {
         assert!(!crate::router::is_valid_function_name("Bad_Name"));
         assert!(!crate::router::is_valid_function_name("../admin"));
         assert!(!crate::router::is_valid_function_name(""));
+    }
+
+    #[test]
+    fn test_rate_limited_response_shape() {
+        let resp = crate::middleware::rate_limited_response(1);
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(resp.headers().get("retry-after").unwrap(), "1");
     }
 }

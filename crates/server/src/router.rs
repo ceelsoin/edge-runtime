@@ -12,6 +12,7 @@ use crate::body_limits::{
     check_content_length, check_response_body_size, collect_body_with_limit,
     payload_too_large_response, BodyLimitError, BodyLimitsConfig,
 };
+use crate::middleware::{RateLimitLayer, rate_limit_layer, rate_limited_response};
 
 type BoxBody = Full<Bytes>;
 const MAX_LOG_ERROR_BYTES: usize = 1024;
@@ -53,13 +54,19 @@ fn log_truncated_error(context: &str, err: &impl std::fmt::Display) {
 pub struct Router {
     registry: Arc<FunctionRegistry>,
     body_limits: BodyLimitsConfig,
+    rate_limiter: Option<RateLimitLayer>,
 }
 
 impl Router {
-    pub fn new(registry: Arc<FunctionRegistry>, body_limits: BodyLimitsConfig) -> Self {
+    pub fn new(
+        registry: Arc<FunctionRegistry>,
+        body_limits: BodyLimitsConfig,
+        rate_limit_rps: Option<u64>,
+    ) -> Self {
         Self {
             registry,
             body_limits,
+            rate_limiter: rate_limit_rps.map(rate_limit_layer),
         }
     }
 
@@ -79,6 +86,12 @@ impl Router {
 
     /// Route ingress traffic: /{function_name}/rest/of/path
     async fn handle_ingress(&self, req: Request<hyper::body::Incoming>) -> Response<BoxBody> {
+        if let Some(limiter) = &self.rate_limiter {
+            if let Some(retry_after_secs) = limiter.check_limit() {
+                return rate_limited_response(retry_after_secs);
+            }
+        }
+
         let path = req.uri().path().to_string();
 
         // Extract function name from first path segment
