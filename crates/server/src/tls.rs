@@ -6,7 +6,7 @@ use std::task::{Context, Poll};
 use anyhow::Error;
 use rustls::ServerConfig;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, UnixStream};
 use tokio_rustls::server::TlsStream;
 use tokio_rustls::TlsAcceptor;
 
@@ -37,10 +37,14 @@ pub fn build_tls_acceptor(config: &TlsConfig) -> Result<TlsAcceptor, Error> {
     Ok(TlsAcceptor::from(Arc::new(tls_config)))
 }
 
-/// Stream that may or may not be wrapped in TLS.
+/// Stream that may be TCP (plain or TLS) or Unix socket.
 pub enum MaybeHttpsStream {
-    Plain(TcpStream),
-    Tls(TlsStream<TcpStream>),
+    /// Plain TCP stream.
+    TcpPlain(TcpStream),
+    /// TLS-encrypted TCP stream.
+    TcpTls(TlsStream<TcpStream>),
+    /// Unix domain socket stream.
+    Unix(UnixStream),
 }
 
 impl AsyncRead for MaybeHttpsStream {
@@ -50,8 +54,9 @@ impl AsyncRead for MaybeHttpsStream {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         match self.get_mut() {
-            MaybeHttpsStream::Plain(s) => Pin::new(s).poll_read(cx, buf),
-            MaybeHttpsStream::Tls(s) => Pin::new(s).poll_read(cx, buf),
+            MaybeHttpsStream::TcpPlain(s) => Pin::new(s).poll_read(cx, buf),
+            MaybeHttpsStream::TcpTls(s) => Pin::new(s).poll_read(cx, buf),
+            MaybeHttpsStream::Unix(s) => Pin::new(s).poll_read(cx, buf),
         }
     }
 }
@@ -63,22 +68,25 @@ impl AsyncWrite for MaybeHttpsStream {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         match self.get_mut() {
-            MaybeHttpsStream::Plain(s) => Pin::new(s).poll_write(cx, buf),
-            MaybeHttpsStream::Tls(s) => Pin::new(s).poll_write(cx, buf),
+            MaybeHttpsStream::TcpPlain(s) => Pin::new(s).poll_write(cx, buf),
+            MaybeHttpsStream::TcpTls(s) => Pin::new(s).poll_write(cx, buf),
+            MaybeHttpsStream::Unix(s) => Pin::new(s).poll_write(cx, buf),
         }
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
-            MaybeHttpsStream::Plain(s) => Pin::new(s).poll_flush(cx),
-            MaybeHttpsStream::Tls(s) => Pin::new(s).poll_flush(cx),
+            MaybeHttpsStream::TcpPlain(s) => Pin::new(s).poll_flush(cx),
+            MaybeHttpsStream::TcpTls(s) => Pin::new(s).poll_flush(cx),
+            MaybeHttpsStream::Unix(s) => Pin::new(s).poll_flush(cx),
         }
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
-            MaybeHttpsStream::Plain(s) => Pin::new(s).poll_shutdown(cx),
-            MaybeHttpsStream::Tls(s) => Pin::new(s).poll_shutdown(cx),
+            MaybeHttpsStream::TcpPlain(s) => Pin::new(s).poll_shutdown(cx),
+            MaybeHttpsStream::TcpTls(s) => Pin::new(s).poll_shutdown(cx),
+            MaybeHttpsStream::Unix(s) => Pin::new(s).poll_shutdown(cx),
         }
     }
 }

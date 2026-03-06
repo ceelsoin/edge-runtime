@@ -63,16 +63,26 @@ deno-edge-runtime [GLOBAL_OPTIONS] <COMMAND> [COMMAND_OPTIONS]
 
 These are consumed mainly by `start` and `watch`:
 
+**Admin Listener:**
+- `EDGE_RUNTIME_ADMIN_HOST`
+- `EDGE_RUNTIME_ADMIN_PORT`
+- `EDGE_RUNTIME_API_KEY`
+- `EDGE_RUNTIME_ADMIN_TLS_CERT`
+- `EDGE_RUNTIME_ADMIN_TLS_KEY`
+
+**Ingress Listener:**
 - `EDGE_RUNTIME_HOST`
 - `EDGE_RUNTIME_PORT`
+- `EDGE_RUNTIME_UNIX_SOCKET`
+- `EDGE_RUNTIME_TLS_CERT`
+- `EDGE_RUNTIME_TLS_KEY`
+
+**Isolate Configuration:**
 - `EDGE_RUNTIME_MAX_HEAP_MIB`
 - `EDGE_RUNTIME_CPU_TIME_LIMIT_MS`
 - `EDGE_RUNTIME_WALL_CLOCK_TIMEOUT_MS`
 
-`start` also supports:
-
-- `EDGE_RUNTIME_TLS_CERT`
-- `EDGE_RUNTIME_TLS_KEY`
+**Other:**
 - `EDGE_RUNTIME_RATE_LIMIT`
 - `EDGE_RUNTIME_SOURCE_MAP`
 
@@ -80,7 +90,36 @@ These are consumed mainly by `start` and `watch`:
 
 ## `start`
 
-Starts the HTTP runtime server and waits for shutdown signal.
+Starts the HTTP runtime server with a **dual-listener architecture**:
+
+- **Admin Listener** (default port 9000): Handles `/_internal/*` management endpoints with optional API key authentication.
+- **Ingress Listener** (default port 8080 or Unix socket): Handles function invocation requests (`/{function_name}/*`) without authentication.
+
+### Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     deno-edge-runtime                           │
+│                                                                 │
+│  ┌─────────────────────┐     ┌─────────────────────────────┐   │
+│  │   Admin Listener    │     │     Ingress Listener        │   │
+│  │   (port 9000)       │     │  (port 8080 or Unix socket) │   │
+│  │                     │     │                             │   │
+│  │  /_internal/health  │     │  /{function_name}/*         │   │
+│  │  /_internal/metrics │     │                             │   │
+│  │  /_internal/funcs   │     │  Public - No authentication │   │
+│  │                     │     │                             │   │
+│  │  X-API-Key required │     │                             │   │
+│  └─────────────────────┘     └─────────────────────────────┘   │
+│              │                           │                      │
+│              └───────────┬───────────────┘                      │
+│                          │                                      │
+│                 ┌────────▼────────┐                            │
+│                 │ FunctionRegistry│                            │
+│                 │  (shared state) │                            │
+│                 └─────────────────┘                            │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ### Usage
 
@@ -88,25 +127,55 @@ Starts the HTTP runtime server and waits for shutdown signal.
 deno-edge-runtime start [OPTIONS]
 ```
 
-### Options
+### Admin Listener Options
+
+- `--admin-host <HOST>`
+  - Default: `0.0.0.0`
+  - Env: `EDGE_RUNTIME_ADMIN_HOST`
+- `--admin-port <PORT>`
+  - Default: `9000`
+  - Env: `EDGE_RUNTIME_ADMIN_PORT`
+- `--api-key <API_KEY>`
+  - API key for authentication on `/_internal/*` endpoints.
+  - If not set, admin endpoints are open (dev mode) with a warning.
+  - **Required for production use.**
+  - Env: `EDGE_RUNTIME_API_KEY`
+- `--admin-tls-cert <PATH>`
+  - TLS certificate file path for admin listener.
+  - Env: `EDGE_RUNTIME_ADMIN_TLS_CERT`
+- `--admin-tls-key <PATH>`
+  - TLS private key file path for admin listener.
+  - Env: `EDGE_RUNTIME_ADMIN_TLS_KEY`
+
+### Ingress Listener Options
 
 - `--host <HOST>`
   - Default: `0.0.0.0`
   - Env: `EDGE_RUNTIME_HOST`
 - `-p, --port <PORT>`
-  - Default: `9000`
+  - TCP port for ingress listener.
+  - Default: `8080` (if neither `--port` nor `--unix-socket` is specified)
+  - Mutually exclusive with `--unix-socket`.
   - Env: `EDGE_RUNTIME_PORT`
-- `--tls-cert <TLS_CERT>`
+- `--unix-socket <PATH>`
+  - Unix socket path for ingress listener.
+  - Mutually exclusive with `--port`.
+  - TLS options are ignored when using Unix socket.
+  - Env: `EDGE_RUNTIME_UNIX_SOCKET`
+- `--tls-cert <PATH>`
+  - TLS certificate file path for ingress listener (TCP only).
   - Env: `EDGE_RUNTIME_TLS_CERT`
-  - Requires `--tls-key` to effectively enable TLS.
-- `--tls-key <TLS_KEY>`
+- `--tls-key <PATH>`
+  - TLS private key file path for ingress listener (TCP only).
   - Env: `EDGE_RUNTIME_TLS_KEY`
-  - Requires `--tls-cert` to effectively enable TLS.
+
+### Common Options
+
 - `--rate-limit <RATE_LIMIT>`
   - Requests per second.
   - Default: `0` (unlimited)
   - Env: `EDGE_RUNTIME_RATE_LIMIT`
-- `--graceful-exit-timeout <GRACEFUL_EXIT_TIMEOUT>`
+- `--graceful-exit-timeout <SECONDS>`
   - Graceful shutdown deadline in seconds.
   - Default: `30`
 - `--max-heap-mib <MAX_HEAP_MIB>`
@@ -114,12 +183,12 @@ deno-edge-runtime start [OPTIONS]
   - Default: `128`
   - `0` means unlimited.
   - Env: `EDGE_RUNTIME_MAX_HEAP_MIB`
-- `--cpu-time-limit-ms <CPU_TIME_LIMIT_MS>`
+- `--cpu-time-limit-ms <MS>`
   - Per-request CPU limit.
   - Default: `50000`
   - `0` means unlimited.
   - Env: `EDGE_RUNTIME_CPU_TIME_LIMIT_MS`
-- `--wall-clock-timeout-ms <WALL_CLOCK_TIMEOUT_MS>`
+- `--wall-clock-timeout-ms <MS>`
   - Per-request wall clock timeout.
   - Default: `60000`
   - `0` means unlimited.
@@ -130,28 +199,108 @@ deno-edge-runtime start [OPTIONS]
   - Default: `none`
   - Env: `EDGE_RUNTIME_SOURCE_MAP`
 
-### Behavior Notes
+### Authentication
 
-- Installs Rustls ring provider at startup for TLS operations.
-- Initializes V8 platform on main thread before creating runtimes.
-- If only one of `--tls-cert` or `--tls-key` is provided, TLS is not enabled.
-- On shutdown, the server stops and all deployed functions are shut down.
+When `--api-key` is set, all requests to `/_internal/*` endpoints must include the `X-API-Key` header:
 
-### Example
+```bash
+# Without auth (returns 401 Unauthorized)
+curl http://localhost:9000/_internal/health
+
+# With auth (returns 200 OK)
+curl -H "X-API-Key: your-secret-key" http://localhost:9000/_internal/health
+```
+
+**Security Warning:** If `--api-key` is not set, the admin API is open to all requests. A warning is logged at startup. This is acceptable for local development but **not recommended for production**.
+
+### Internal Endpoints
+
+All endpoints below are served on the **admin listener** (default port 9000):
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/_internal/health` | GET | Health check |
+| `/_internal/metrics` | GET | Runtime and function metrics |
+| `/_internal/functions` | GET | List all deployed functions |
+| `/_internal/functions` | POST | Deploy new function (body: eszip, header: `x-function-name`) |
+| `/_internal/functions/{name}` | GET | Get function info |
+| `/_internal/functions/{name}` | PUT | Update function |
+| `/_internal/functions/{name}` | DELETE | Delete function |
+| `/_internal/functions/{name}/reload` | POST | Hot reload (requires feature flag) |
+
+### Ingress Routing
+
+Function requests are routed via the **ingress listener** (default port 8080):
+
+```
+GET /my-function/api/users/123
+    │            └───────────────── Forwarded path: /api/users/123
+    └─────────────────────────────── Function name: my-function
+```
+
+- Requests to `/_internal/*` on the ingress listener return `404 Not Found`.
+- The function name is extracted from the first path segment.
+- The remaining path is forwarded to the function handler.
+
+### Examples
+
+**Basic usage (development):**
+
+```bash
+# Start with default ports (admin: 9000, ingress: 8080)
+deno-edge-runtime start
+```
+
+**Production with authentication:**
 
 ```bash
 deno-edge-runtime start \
-  --host 0.0.0.0 \
-  --port 9000 \
-  --max-heap-mib 256 \
-  --cpu-time-limit-ms 10000 \
-  --wall-clock-timeout-ms 15000 \
-  --rate-limit 200
+  --api-key "$(cat /run/secrets/api-key)" \
+  --port 8080 \
+  --max-heap-mib 256
 ```
+
+**With Unix socket for ingress:**
+
+```bash
+deno-edge-runtime start \
+  --api-key "super-secret" \
+  --unix-socket /var/run/edge-runtime.sock
+```
+
+**With TLS on both listeners:**
+
+```bash
+deno-edge-runtime start \
+  --api-key "secret" \
+  --admin-tls-cert /certs/admin.crt \
+  --admin-tls-key /certs/admin.key \
+  --tls-cert /certs/ingress.crt \
+  --tls-key /certs/ingress.key \
+  --port 8443
+```
+
+**Using environment variables:**
+
+```bash
+export EDGE_RUNTIME_API_KEY="my-secret-key"
+export EDGE_RUNTIME_PORT=8080
+export EDGE_RUNTIME_ADMIN_PORT=9000
+deno-edge-runtime start
+```
+
+### Behavior Notes
+
+- Both listeners share the same `FunctionRegistry` (deployed functions are available on both).
+- Installs Rustls ring provider at startup for TLS operations.
+- Initializes V8 platform on main thread before creating runtimes.
+- If only one of `--tls-cert` or `--tls-key` is provided, TLS is not enabled.
+- On shutdown, both listeners stop and all deployed functions are shut down.
+- Unix socket file is automatically cleaned up on shutdown.
 
 ### TLS Configuration
 
-The server supports HTTPS via TLS certificates. When both `--tls-cert` and `--tls-key` are provided, the server serves HTTPS instead of HTTP.
+Both listeners support HTTPS via TLS certificates. When both cert and key are provided for a listener, it serves HTTPS instead of HTTP.
 
 #### Generating a Self-Signed Certificate (Development)
 
@@ -164,39 +313,23 @@ openssl req -x509 -newkey rsa:4096 \
   -subj '/CN=localhost'
 ```
 
-#### Starting with TLS
-
-```bash
-deno-edge-runtime start \
-  --tls-cert cert.pem \
-  --tls-key key.pem \
-  --port 9443
-```
-
-Or using environment variables:
-
-```bash
-export EDGE_RUNTIME_TLS_CERT=./certs/server.crt
-export EDGE_RUNTIME_TLS_KEY=./certs/server.key
-deno-edge-runtime start --port 9443
-```
-
 #### Testing HTTPS
 
 ```bash
-# With self-signed certificate (skip verification)
-curl -k https://localhost:9443/_internal/metrics
+# Admin listener with self-signed certificate
+curl -k -H "X-API-Key: secret" https://localhost:9000/_internal/health
 
-# With CA-signed certificate
-curl https://your-domain.com:9443/_internal/metrics
+# Ingress listener
+curl -k https://localhost:8443/my-function/endpoint
 ```
 
 #### TLS Notes
 
-- **ALPN**: The server advertises both `h2` (HTTP/2) and `http/1.1` protocols via ALPN.
+- **ALPN**: Both listeners advertise `h2` (HTTP/2) and `http/1.1` protocols via ALPN.
 - **Startup log**: When TLS is enabled, the startup log shows `https://` instead of `http://`.
-- **Handshake failures**: Failed TLS handshakes are logged at `warn` level with the client address.
-- **Production**: For production, use certificates signed by a trusted CA (e.g., Let's Encrypt).
+- **Handshake failures**: Failed TLS handshakes are logged at `warn` level.
+- **Unix socket**: TLS is not supported for Unix socket ingress (redundant for local IPC).
+- **Production**: For production, use certificates signed by a trusted CA.
 
 ## `bundle`
 

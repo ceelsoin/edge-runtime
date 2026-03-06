@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::{Args, ValueEnum};
@@ -15,22 +16,55 @@ enum SourceMapMode {
 
 #[derive(Args)]
 pub struct StartArgs {
-    /// IP address to bind
+    // ─────────────────────────────────────────────────────────────────────────
+    // Admin Listener Configuration (port 9000 by default)
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Admin API host
+    #[arg(long, default_value = "0.0.0.0", env = "EDGE_RUNTIME_ADMIN_HOST")]
+    admin_host: String,
+
+    /// Admin API port
+    #[arg(long, default_value_t = 9000, env = "EDGE_RUNTIME_ADMIN_PORT")]
+    admin_port: u16,
+
+    /// API key for admin endpoint authentication (required in production)
+    #[arg(long, env = "EDGE_RUNTIME_API_KEY")]
+    api_key: Option<String>,
+
+    /// TLS certificate file path for admin API
+    #[arg(long, env = "EDGE_RUNTIME_ADMIN_TLS_CERT")]
+    admin_tls_cert: Option<String>,
+
+    /// TLS private key file path for admin API
+    #[arg(long, env = "EDGE_RUNTIME_ADMIN_TLS_KEY")]
+    admin_tls_key: Option<String>,
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Ingress Listener Configuration (TCP port or Unix socket)
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Ingress IP address to bind (for TCP mode)
     #[arg(long, default_value = "0.0.0.0", env = "EDGE_RUNTIME_HOST")]
     host: String,
 
-    /// Port to listen on
-    #[arg(short, long, default_value_t = 9000, env = "EDGE_RUNTIME_PORT")]
-    port: u16,
+    /// Ingress port to listen on (mutually exclusive with --unix-socket)
+    #[arg(short, long, env = "EDGE_RUNTIME_PORT")]
+    port: Option<u16>,
 
-    /// TLS certificate file path
+    /// Unix socket path for ingress (mutually exclusive with --port)
+    #[arg(long, env = "EDGE_RUNTIME_UNIX_SOCKET")]
+    unix_socket: Option<PathBuf>,
+
+    /// TLS certificate file path for ingress (TCP only)
     #[arg(long, env = "EDGE_RUNTIME_TLS_CERT")]
     tls_cert: Option<String>,
 
-    /// TLS private key file path
+    /// TLS private key file path for ingress (TCP only)
     #[arg(long, env = "EDGE_RUNTIME_TLS_KEY")]
     tls_key: Option<String>,
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Common Options
+    // ─────────────────────────────────────────────────────────────────────────
     /// Rate limit (requests per second, 0 = unlimited)
     #[arg(long, default_value_t = 0, env = "EDGE_RUNTIME_RATE_LIMIT")]
     rate_limit: u64,
@@ -57,13 +91,24 @@ pub struct StartArgs {
 }
 
 pub fn run(args: StartArgs) -> Result<(), anyhow::Error> {
+    // Validate mutually exclusive options
+    if args.port.is_some() && args.unix_socket.is_some() {
+        return Err(anyhow::anyhow!(
+            "--port and --unix-socket are mutually exclusive"
+        ));
+    }
+
+    // Warn if TLS specified with Unix socket
+    if args.unix_socket.is_some() && (args.tls_cert.is_some() || args.tls_key.is_some()) {
+        tracing::warn!("TLS options (--tls-cert, --tls-key) ignored for Unix socket ingress");
+    }
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("edge-rt")
         .build()?;
 
     runtime.block_on(async {
-        let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
         let shutdown = CancellationToken::new();
 
         let default_config = IsolateConfig {
@@ -84,29 +129,61 @@ pub fn run(args: StartArgs) -> Result<(), anyhow::Error> {
         let shutdown_signal = shutdown.clone();
         tokio::spawn(edge_server::graceful::wait_for_shutdown_signal(shutdown_signal));
 
-        let tls = match (args.tls_cert, args.tls_key) {
+        // Build admin listener config
+        let admin_addr: SocketAddr =
+            format!("{}:{}", args.admin_host, args.admin_port).parse()?;
+        let admin_tls = match (&args.admin_tls_cert, &args.admin_tls_key) {
             (Some(cert), Some(key)) => Some(edge_server::TlsConfig {
-                cert_path: cert,
-                key_path: key,
+                cert_path: cert.clone(),
+                key_path: key.clone(),
             }),
             _ => None,
         };
 
-        let config = edge_server::ServerConfig {
-            addr,
-            tls,
-            rate_limit_rps: if args.rate_limit > 0 {
-                Some(args.rate_limit)
-            } else {
-                None
+        // Build ingress listener config
+        let ingress_type = match (&args.unix_socket, args.port) {
+            (Some(path), _) => edge_server::IngressListenerType::Unix(path.clone()),
+            (_, Some(port)) => {
+                let addr: SocketAddr = format!("{}:{}", args.host, port).parse()?;
+                edge_server::IngressListenerType::Tcp(addr)
+            }
+            (None, None) => {
+                // Default: TCP port 8080
+                let addr: SocketAddr = format!("{}:8080", args.host).parse()?;
+                edge_server::IngressListenerType::Tcp(addr)
+            }
+        };
+
+        let ingress_tls = match (&args.tls_cert, &args.tls_key, &args.unix_socket) {
+            (Some(cert), Some(key), None) => Some(edge_server::TlsConfig {
+                cert_path: cert.clone(),
+                key_path: key.clone(),
+            }),
+            _ => None,
+        };
+
+        let config = edge_server::DualServerConfig {
+            admin: edge_server::AdminListenerConfig {
+                addr: admin_addr,
+                api_key: args.api_key,
+                tls: admin_tls,
+            },
+            ingress: edge_server::IngressListenerConfig {
+                listener_type: ingress_type,
+                tls: ingress_tls,
+                rate_limit_rps: if args.rate_limit > 0 {
+                    Some(args.rate_limit)
+                } else {
+                    None
+                },
             },
             graceful_exit_deadline_secs: args.graceful_exit_timeout,
         };
 
-        info!("starting deno-edge-runtime on {}", addr);
+        info!("starting deno-edge-runtime");
 
-        // Run the server (blocks until shutdown)
-        edge_server::run_server(config, registry.clone(), shutdown.clone()).await?;
+        // Run the dual-listener server (blocks until shutdown)
+        edge_server::run_dual_server(config, registry.clone(), shutdown.clone()).await?;
 
         // Shutdown all functions
         registry.shutdown_all().await;
