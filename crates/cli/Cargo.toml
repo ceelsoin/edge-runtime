@@ -34,6 +34,7 @@ walkdir.workspace = true
 bytes.workspace = true
 glob.workspace = true
 rustls.workspace = true
+tungstenite = "0.24"
 
 [features]
 hot-reload = ["functions/hot-reload"]

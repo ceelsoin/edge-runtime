@@ -24,6 +24,7 @@ uuid.workspace = true
 chrono.workspace = true
 futures-util.workspace = true
 url.workspace = true
+tungstenite = "0.24"
 
 [features]
 hot-reload = []
