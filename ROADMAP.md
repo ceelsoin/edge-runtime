@@ -9,6 +9,23 @@
 
 ---
 
+## Foco Atual (Mar/2026)
+
+### Windows CI: remover patch local do `deno_io`
+
+**Contexto:** build Windows quebra com `E0308` em `deno_io 0.147.0` (mismatch de `c_void`) quando resolvido com o lock/deps atuais.
+
+- [x] Mitigação imediata aplicada com `[patch.crates-io]` local (`patches/deno_io`)
+- [ ] Trocar patch local por override via `git` (sem diretório `patches/` no repositório)
+- [ ] Monitorar release upstream com fix publicado em crates.io para remover qualquer override
+- [ ] Critério de saída: `cargo check --workspace --locked` + CI Windows verde sem patch local
+
+**Notas de decisão (já validadas):**
+- Downgrade isolado de `vsock` não resolve sozinho.
+- `libc` não pode descer abaixo de `0.2.182` no grafo atual (`rustix -> tempfile -> deno_process`).
+
+---
+
 ## Fase 0 — Crítico (Pré-Produção)
 
 > Itens que **bloqueiam** qualquer uso em produção. Devem ser resolvidos antes de expor o runtime a tráfego externo.

@@ -117,3 +117,6 @@ base64 = "0.22"
 [profile.release]
 debug = true
 lto = "thin"
+
+[patch.crates-io]
+deno_io = { path = "patches/deno_io" }
