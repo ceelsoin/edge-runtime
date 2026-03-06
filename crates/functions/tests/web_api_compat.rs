@@ -24,7 +24,7 @@ fn make_runtime() -> JsRuntime {
         ..Default::default()
     };
     extensions::set_extension_transpiler(&mut opts);
-    let mut runtime = JsRuntime::new(opts);
+    let runtime = JsRuntime::new(opts);
 
     // Add PermissionsContainer to the op_state so that deno_web and other extensions can access it
     {

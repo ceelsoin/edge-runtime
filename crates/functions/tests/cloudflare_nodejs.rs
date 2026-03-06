@@ -20,7 +20,7 @@ fn make_runtime() -> JsRuntime {
         ..Default::default()
     };
     extensions::set_extension_transpiler(&mut opts);
-    let mut runtime = JsRuntime::new(opts);
+    let runtime = JsRuntime::new(opts);
 
     {
         let op_state = runtime.op_state();
