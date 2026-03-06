@@ -125,7 +125,7 @@ Detailed CLI documentation: [docs/cli.md](docs/cli.md).
 ## `docs/` Folder Guide
 
 - [docs/cli.md](docs/cli.md): full reference for CLI commands (`start`, `bundle`, `watch`, `test`, `check`)
-- [docs/debugging-vscode.md](docs/debugging-vscode.md): debugging with the V8 inspector via VS Code, Chrome DevTools, and Neovim
+- [docs/debugging.md](docs/debugging.md): debugging with the V8 inspector via VS Code, Chrome DevTools, and Neovim
 - [docs/testing-library.md](docs/testing-library.md): usage guide for the `edge://assert/*` library (assertions, suites, hooks, mocks, snapshots)
 - [docs/testing-api-reference.md](docs/testing-api-reference.md): detailed API reference for test functions
 - [docs/load_testing.md](docs/load_testing.md): methodology and interpretation of load tests with k6
@@ -158,7 +158,7 @@ cargo run -- watch --path ./examples --inspect 9229
 - performs automatic deploy/update
 - can expose a V8 inspector per function
 
-Debug guide: [docs/debugging-vscode.md](docs/debugging-vscode.md).
+Debug guide: [docs/debugging.md](docs/debugging.md).
 
 ## Tests
 
