@@ -45,6 +45,17 @@ pub struct WatchArgs {
     /// Default wall clock timeout per request in ms (0 = unlimited)
     #[arg(long, default_value_t = 60000, env = "EDGE_RUNTIME_WALL_CLOCK_TIMEOUT_MS")]
     wall_clock_timeout_ms: u64,
+
+    /// Enable V8 inspector protocol in watch mode (optional base port, default: 9229)
+    ///
+    /// When multiple functions are loaded, ports are assigned sequentially:
+    /// base, base+1, base+2, ... in deployment order.
+    #[arg(long, value_name = "PORT", num_args = 0..=1, default_missing_value = "9229")]
+    inspect: Option<u16>,
+
+    /// Wait for debugger attach and break on first statement (requires --inspect)
+    #[arg(long, default_value_t = false)]
+    inspect_brk: bool,
 }
 
 /// A simple file-system loader for deno_graph.
@@ -178,11 +189,14 @@ pub fn run(args: WatchArgs) -> Result<(), anyhow::Error> {
             max_heap_size_bytes: (args.max_heap_mib as usize) * 1024 * 1024,
             cpu_time_limit_ms: args.cpu_time_limit_ms,
             wall_clock_timeout_ms: args.wall_clock_timeout_ms,
+            inspect_port: None,
+            inspect_brk: args.inspect_brk,
+            enable_source_maps: true,
         };
 
         let registry = Arc::new(functions::registry::FunctionRegistry::new(
             shutdown.clone(),
-            default_config,
+            default_config.clone(),
         ));
 
         // Spawn signal handler for graceful shutdown
@@ -193,7 +207,8 @@ pub fn run(args: WatchArgs) -> Result<(), anyhow::Error> {
             addr,
             tls: None,
             rate_limit_rps: None,
-            graceful_exit_deadline_secs: 30,
+            // Watch mode favors fast feedback and instant cancellation.
+            graceful_exit_deadline_secs: 0,
         };
 
         info!("starting edge runtime in watch mode on {}", addr);
@@ -237,7 +252,7 @@ pub fn run(args: WatchArgs) -> Result<(), anyhow::Error> {
         });
 
         // Initial load of functions
-        load_and_deploy_functions(path, &registry).await?;
+        load_and_deploy_functions(path, &registry, &default_config, args.inspect).await?;
 
         let mut last_update = tokio::time::Instant::now();
         let debounce_duration = Duration::from_millis(args.interval);
@@ -253,7 +268,7 @@ pub fn run(args: WatchArgs) -> Result<(), anyhow::Error> {
                         if now.duration_since(last_update) >= debounce_duration {
                             println!("\n{}", "─".repeat(80));
                             println!("🔄 Changes detected, reloading...");
-                            if let Err(e) = load_and_deploy_functions(path, &registry).await {
+                            if let Err(e) = load_and_deploy_functions(path, &registry, &default_config, args.inspect).await {
                                 eprintln!("❌ Error loading functions: {}", e);
                             }
                             last_update = now;
@@ -263,8 +278,14 @@ pub fn run(args: WatchArgs) -> Result<(), anyhow::Error> {
             } => {}
         }
 
-        // Shutdown all functions
-        registry.shutdown_all().await;
+        // In watch mode we prefer immediate cancellation over graceful draining.
+        // Try a short shutdown window for isolates, then continue process exit.
+        if tokio::time::timeout(Duration::from_millis(200), registry.shutdown_all())
+            .await
+            .is_err()
+        {
+            tracing::warn!("watch shutdown timeout reached; forcing immediate exit");
+        }
 
         info!("edge runtime watch mode stopped");
         Ok(())
@@ -274,6 +295,8 @@ pub fn run(args: WatchArgs) -> Result<(), anyhow::Error> {
 async fn load_and_deploy_functions(
     path: &Path,
     registry: &Arc<functions::registry::FunctionRegistry>,
+    default_config: &IsolateConfig,
+    inspect_base_port: Option<u16>,
 ) -> anyhow::Result<()> {
     info!("scanning {}", path.display());
 
@@ -282,12 +305,16 @@ async fn load_and_deploy_functions(
     let mut deployed = 0;
     let mut skipped = 0;
 
-    for entry in walkdir::WalkDir::new(path)
+    let mut source_files: Vec<std::path::PathBuf> = walkdir::WalkDir::new(path)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.path().is_file())
-    {
-        let file_path = entry.path();
+        .map(|e| e.path().to_path_buf())
+        .collect();
+    source_files.sort();
+
+    let mut inspect_index: u16 = 0;
+    for file_path in source_files.iter() {
 
         // Skip node_modules, dist, build, etc.
         if file_path
@@ -307,29 +334,66 @@ async fn load_and_deploy_functions(
             continue;
         }
 
-        // Generate function name from path
-        let relative_path = file_path.strip_prefix(path).unwrap_or(file_path);
+        // Generate function name from path.
+        // If watch target is a single file, strip_prefix(path) becomes empty,
+        // so we fallback to the filename to keep stable names like "hello".
+        let relative_path = if path.is_file() {
+            file_path.file_name().map(Path::new).unwrap_or(file_path.as_path())
+        } else {
+            file_path.strip_prefix(path).unwrap_or(file_path.as_path())
+        };
         let func_name = path_to_function_name(relative_path);
+
+        let inspect_port = if let Some(base) = inspect_base_port {
+            let port = base
+                .checked_add(inspect_index)
+                .ok_or_else(|| anyhow::anyhow!("inspector port overflow for '{}'", func_name))?;
+            inspect_index = inspect_index.saturating_add(1);
+            Some(port)
+        } else {
+            None
+        };
+
+        let function_config = IsolateConfig {
+            max_heap_size_bytes: default_config.max_heap_size_bytes,
+            cpu_time_limit_ms: default_config.cpu_time_limit_ms,
+            wall_clock_timeout_ms: default_config.wall_clock_timeout_ms,
+            inspect_port,
+            inspect_brk: default_config.inspect_brk,
+            enable_source_maps: default_config.enable_source_maps,
+        };
 
         match bundle_file(file_path).await {
             Ok(eszip_bytes) => {
                 let bytes = Bytes::from(eszip_bytes);
 
                 // Try to deploy (or update if exists)
-                match registry.deploy(func_name.clone(), bytes.clone(), None).await {
+                match registry
+                    .deploy(func_name.clone(), bytes.clone(), Some(function_config.clone()))
+                    .await
+                {
                     Ok(_info) => {
                         println!(
                             "✅ Deployed: {} ({} bytes)",
                             func_name,
                             bytes.len()
                         );
+                        if let Some(port) = inspect_port {
+                            println!("   └─ inspector: ws://127.0.0.1:{}/ws", port);
+                        }
                         deployed += 1;
                     }
                     Err(e) if e.to_string().contains("already exists") => {
                         // Try to update instead
-                        match registry.update(&func_name, bytes.clone(), None).await {
+                        match registry
+                            .update(&func_name, bytes.clone(), Some(function_config.clone()))
+                            .await
+                        {
                             Ok(_) => {
                                 println!("🔄 Updated: {}", func_name);
+                                if let Some(port) = inspect_port {
+                                    println!("   └─ inspector: ws://127.0.0.1:{}/ws", port);
+                                }
                                 deployed += 1;
                             }
                             Err(e) => {
