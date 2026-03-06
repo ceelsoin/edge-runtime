@@ -35,15 +35,22 @@ pub struct HeapLimitState {
     pub function_name: String,
     /// Flag indicating the isolate should terminate due to memory.
     pub should_terminate: std::sync::atomic::AtomicBool,
+    /// Thread-safe V8 handle to terminate execution from callback.
+    pub isolate_handle: deno_core::v8::IsolateHandle,
 }
 
 impl HeapLimitState {
-    pub fn new(max_heap_bytes: usize, function_name: String) -> Self {
+    pub fn new(
+        max_heap_bytes: usize,
+        function_name: String,
+        isolate_handle: deno_core::v8::IsolateHandle,
+    ) -> Self {
         Self {
             callback_count: AtomicUsize::new(0),
             max_heap_bytes,
             function_name,
             should_terminate: std::sync::atomic::AtomicBool::new(false),
+            isolate_handle,
         }
     }
 }
@@ -83,14 +90,16 @@ pub extern "C" fn near_heap_limit_callback(
     } else {
         // Second call - memory is still growing, mark for termination
         state.should_terminate.store(true, Ordering::SeqCst);
+        state.isolate_handle.terminate_execution();
 
         eprintln!(
             "ERROR: function '{}' exceeded heap limit after extension. Marking for termination.",
             state.function_name
         );
 
-        // Return same limit to trigger V8 OOM handling
-        current_heap_limit
+        // Return a larger limit to avoid process-level fatal OOM while
+        // terminate_execution unwinds the current JS execution.
+        current_heap_limit.saturating_mul(2)
     }
 }
 

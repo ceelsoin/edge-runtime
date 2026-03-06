@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicBool;
 use std::net::TcpListener;
 use std::io::ErrorKind;
 use std::thread;
+use std::time::Duration;
 
 use anyhow::Error;
 use bytes::Bytes;
@@ -28,6 +29,20 @@ use crate::types::*;
 struct InspectorServerGuard {
     stop: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
+}
+
+const MAX_ISOLATE_RESTARTS: u32 = 5;
+
+fn fail_pending_requests(
+    request_rx: &mut mpsc::UnboundedReceiver<IsolateRequest>,
+    reason: &str,
+) {
+    request_rx.close();
+    while let Ok(req) = request_rx.try_recv() {
+        let _ = req
+            .response_tx
+            .send(Err(anyhow::anyhow!(reason.to_string())));
+    }
 }
 
 fn timeout_response() -> http::Response<bytes::Bytes> {
@@ -95,7 +110,7 @@ pub async fn create_function(
     // Build the IsolateHandle
     let shutdown = parent_shutdown.child_token();
     let handle = IsolateHandle {
-        request_tx,
+        request_tx: Arc::new(std::sync::Mutex::new(Some(request_tx))),
         shutdown: shutdown.clone(),
         id: uuid::Uuid::new_v4(),
         alive,
@@ -111,7 +126,7 @@ pub async fn create_function(
     };
     let inspector_stop_for_thread = inspector_stop.clone();
 
-    // Spawn the isolate on a dedicated thread (JsRuntime is !Send)
+    // Spawn the isolate supervisor on a dedicated thread (JsRuntime is !Send)
     let isolate_name = name.clone();
     let isolate_config = config.clone();
     let isolate_metrics = metrics.clone();
@@ -121,6 +136,7 @@ pub async fn create_function(
     } else {
         None
     };
+    let supervisor_handle = handle.clone();
 
     std::thread::Builder::new()
         .name(format!("fn-{}", name))
@@ -130,33 +146,92 @@ pub async fn create_function(
                 .build()
                 .expect("failed to build tokio runtime for isolate");
 
-            let local = tokio::task::LocalSet::new();
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                local.block_on(&rt, run_isolate(
-                    isolate_name.clone(),
-                    eszip,
-                    root_specifier,
-                    isolate_config,
-                    request_rx,
-                    shutdown,
-                    isolate_metrics,
-                    bundle_format,
-                    snapshot_bytes,
-                    bundle_package.v8_version.clone(),
-                    inspector_stop_for_thread,
-                ))
-            }));
+            let mut request_rx = request_rx;
+            let mut restart_count = 0_u32;
 
-            // Mark isolate as dead regardless of how it exited
-            alive_for_thread.store(false, Ordering::SeqCst);
+            loop {
+                let local = tokio::task::LocalSet::new();
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    local.block_on(&rt, run_isolate(
+                        isolate_name.clone(),
+                        eszip.clone(),
+                        root_specifier.clone(),
+                        isolate_config.clone(),
+                        &mut request_rx,
+                        shutdown.clone(),
+                        isolate_metrics.clone(),
+                        bundle_format,
+                        snapshot_bytes.clone(),
+                        bundle_package.v8_version.clone(),
+                        inspector_stop_for_thread.clone(),
+                        supervisor_handle.clone(),
+                    ))
+                }));
 
-            match result {
-                Ok(res) => match res {
-                    Ok(()) => info!("isolate '{}' exited cleanly", isolate_name),
-                    Err(e) => error!("isolate '{}' exited with error: {}", isolate_name, e),
+                match result {
+                    Ok(Ok(())) => {
+                        info!("isolate '{}' exited cleanly", isolate_name);
+                        break;
+                    }
+                    Ok(Err(e)) => {
+                        if shutdown.is_cancelled() {
+                            info!("isolate '{}' stopped during shutdown", isolate_name);
+                            break;
+                        }
+                        error!("isolate '{}' exited with error: {}", isolate_name, e);
+                        break;
+                    }
+                    Err(e) => {
+                        error!("isolate '{}' panicked: {:?}", isolate_name, e);
+
+                        // Mark dead and close request channel so pending/new requests fail fast.
+                        supervisor_handle.mark_dead();
+                        supervisor_handle.close_request_tx();
+                        fail_pending_requests(
+                            &mut request_rx,
+                            "isolate panicked; request channel closed",
+                        );
+
+                        if shutdown.is_cancelled() {
+                            break;
+                        }
+
+                        if restart_count >= MAX_ISOLATE_RESTARTS {
+                            error!(
+                                "isolate '{}' exceeded max restart attempts ({}), giving up",
+                                isolate_name,
+                                MAX_ISOLATE_RESTARTS
+                            );
+                            break;
+                        }
+
+                        restart_count += 1;
+                        let backoff_secs = (1_u64 << (restart_count.saturating_sub(1))).min(60);
+                        warn!(
+                            "restarting isolate '{}' after panic (attempt {}/{}), backoff={}s",
+                            isolate_name,
+                            restart_count,
+                            MAX_ISOLATE_RESTARTS,
+                            backoff_secs
+                        );
+
+                        std::thread::sleep(Duration::from_secs(backoff_secs));
+                        if shutdown.is_cancelled() {
+                            break;
+                        }
+
+                        // Re-open request channel for the new isolate instance.
+                        let (new_tx, new_rx) = mpsc::unbounded_channel::<IsolateRequest>();
+                        supervisor_handle.replace_request_tx(new_tx);
+                        request_rx = new_rx;
+                    }
                 }
-                Err(e) => error!("isolate '{}' panicked: {:?}", isolate_name, e),
             }
+
+            // Mark isolate as dead when supervisor exits.
+            alive_for_thread.store(false, Ordering::SeqCst);
+            supervisor_handle.mark_dead();
+            supervisor_handle.close_request_tx();
         })
         .map_err(|e| anyhow::anyhow!("failed to spawn isolate thread: {e}"))?;
 
@@ -181,13 +256,14 @@ async fn run_isolate(
     eszip: Arc<eszip::EszipV2>,
     root_specifier: deno_core::ModuleSpecifier,
     config: IsolateConfig,
-    mut request_rx: mpsc::UnboundedReceiver<IsolateRequest>,
+    request_rx: &mut mpsc::UnboundedReceiver<IsolateRequest>,
     shutdown: CancellationToken,
     metrics: Arc<FunctionMetrics>,
     bundle_format: BundleFormat,
     snapshot_bytes: Option<Vec<u8>>,
     v8_version: String,
     inspector_stop: Option<Arc<AtomicBool>>,
+    liveness_handle: IsolateHandle,
 ) -> Result<(), Error> {
     // Track cold start timing
     let cold_start_timer = std::time::Instant::now();
@@ -276,11 +352,22 @@ async fn run_isolate(
     );
 
     info!("function '{}' isolate initialized, entering request loop", name);
+    liveness_handle.mark_alive();
 
     // Request handling loop
     loop {
         tokio::select! {
             Some(req) = request_rx.recv() => {
+                #[cfg(debug_assertions)]
+                {
+                    if let Some(path) = std::env::var_os("EDGE_RUNTIME_TEST_PANIC_ON_PATH") {
+                        let path = path.to_string_lossy();
+                        if req.request.uri().path() == path {
+                            panic!("injected panic for testing on path '{}': function='{}'", path, name);
+                        }
+                    }
+                }
+
                 metrics.active_requests.fetch_add(1, Ordering::Relaxed);
                 metrics.total_requests.fetch_add(1, Ordering::Relaxed);
 
@@ -506,9 +593,11 @@ async fn load_from_eszip_with_init(
 
     // Register near-heap-limit callback if heap limit is configured
     let heap_limit_state_ptr = if config.max_heap_size_bytes > 0 {
+        let v8_handle = js_runtime.v8_isolate().thread_safe_handle();
         let state = Box::new(HeapLimitState::new(
             config.max_heap_size_bytes,
             function_name.to_string(),
+            v8_handle,
         ));
         let state_ptr = Box::into_raw(state);
 

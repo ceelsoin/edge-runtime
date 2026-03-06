@@ -178,10 +178,12 @@ match permit {
 - [x] Registrar `v8::Isolate::add_near_heap_limit_callback()` na criação do isolate
 - [x] No callback, logar warning e retornar `current_heap + small_delta` (última chance)
 - [x] Se chamado segunda vez, terminar o isolate
-- [ ] Marcar função como `Error` no registry
-- [ ] Adicionar teste com código que aloca memória infinitamente
+- [x] Marcar função como `Error` no registry
+- [x] Adicionar teste com código que aloca memória infinitamente
 
-**Status:** 🚧 Em progresso (3/5)
+TODO (futuro): expor este evento como métrica por função (ex.: `heap_limit_terminations_total`) para observabilidade e alertas.
+
+**Status:** ✅ Concluído
 
 ---
 
@@ -192,14 +194,14 @@ match permit {
 **Arquivo:** `crates/functions/src/lifecycle.rs`
 
 - [x] Detectar isolate morto e evitar roteamento para handle inválido (`IsolateHandle::alive`)
-- [ ] Após `catch_unwind` capturar panic, atualizar status para `Error` no registry
-- [ ] Fechar o `request_tx` channel para que requests pendentes recebam erro
-- [ ] Implementar auto-restart com backoff exponencial (1s, 2s, 4s, 8s, max 60s)
-- [ ] Limitar número de restarts consecutivos (max 5)
-- [ ] Logar cada restart com counter
-- [ ] Adicionar teste de panic seguido de request
+- [x] Após `catch_unwind` capturar panic, atualizar status para `Error` no registry
+- [x] Fechar o `request_tx` channel para que requests pendentes recebam erro
+- [x] Implementar auto-restart com backoff exponencial (1s, 2s, 4s, 8s, max 60s)
+- [x] Limitar número de restarts consecutivos (max 5)
+- [x] Logar cada restart com counter
+- [x] Adicionar teste de panic seguido de request
 
-**Status:** 🚧 Em progresso (1/7)
+**Status:** ✅ Concluído
 
 ---
 

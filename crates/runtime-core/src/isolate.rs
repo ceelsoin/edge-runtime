@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use anyhow::Error;
 use deno_core::ModuleSpecifier;
@@ -83,7 +84,7 @@ pub struct IsolateRequest {
 #[derive(Clone)]
 pub struct IsolateHandle {
     /// Send requests to the isolate's event loop.
-    pub request_tx: mpsc::UnboundedSender<IsolateRequest>,
+    pub request_tx: Arc<Mutex<Option<mpsc::UnboundedSender<IsolateRequest>>>>,
     /// Signal the isolate to shut down.
     pub shutdown: CancellationToken,
     /// Unique ID for this isolate instance.
@@ -112,7 +113,14 @@ impl IsolateHandle {
 
         let (response_tx, response_rx) = oneshot::channel();
 
-        self.request_tx
+        let sender = self
+            .request_tx
+            .lock()
+            .map_err(|_| anyhow::anyhow!("isolate request channel lock poisoned"))?
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("isolate request channel closed"))?;
+
+        sender
             .send(IsolateRequest {
                 request,
                 response_tx,
@@ -125,6 +133,25 @@ impl IsolateHandle {
     /// Mark the isolate as dead. Called when the isolate thread exits.
     pub fn mark_dead(&self) {
         self.alive.store(false, Ordering::SeqCst);
+    }
+
+    /// Mark the isolate as alive (used after successful auto-restart).
+    pub fn mark_alive(&self) {
+        self.alive.store(true, Ordering::SeqCst);
+    }
+
+    /// Replace the underlying request sender (used during auto-restart).
+    pub fn replace_request_tx(&self, sender: mpsc::UnboundedSender<IsolateRequest>) {
+        if let Ok(mut guard) = self.request_tx.lock() {
+            *guard = Some(sender);
+        }
+    }
+
+    /// Close request sender so pending/new requests fail fast.
+    pub fn close_request_tx(&self) {
+        if let Ok(mut guard) = self.request_tx.lock() {
+            *guard = None;
+        }
     }
 }
 

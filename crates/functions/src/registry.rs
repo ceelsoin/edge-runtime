@@ -19,17 +19,13 @@ pub struct FunctionRegistry {
 
 impl FunctionRegistry {
     fn reconcile_entry_status(entry: &mut FunctionEntry) {
-        if entry.status != FunctionStatus::Running {
-            return;
-        }
-
         let is_dead = entry
             .isolate_handle
             .as_ref()
             .map(|handle| !handle.is_alive())
             .unwrap_or(true);
 
-        if is_dead {
+        if is_dead && entry.status == FunctionStatus::Running {
             entry.status = FunctionStatus::Error;
             entry.updated_at = Utc::now();
             if entry.last_error.is_none() {
@@ -37,6 +33,9 @@ impl FunctionRegistry {
                     "isolate terminated unexpectedly (panic or resource limit)".to_string(),
                 );
             }
+        } else if !is_dead && entry.status == FunctionStatus::Error {
+            entry.status = FunctionStatus::Running;
+            entry.updated_at = Utc::now();
         }
     }
 
@@ -272,7 +271,7 @@ mod tests {
         let (request_tx, _request_rx) = tokio::sync::mpsc::unbounded_channel();
         let alive = Arc::new(AtomicBool::new(false));
         let handle = runtime_core::isolate::IsolateHandle {
-            request_tx,
+            request_tx: Arc::new(std::sync::Mutex::new(Some(request_tx))),
             shutdown: CancellationToken::new(),
             id: uuid::Uuid::new_v4(),
             alive,
