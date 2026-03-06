@@ -259,10 +259,14 @@ TODO (futuro): expor este evento como métrica por função (ex.: `heap_limit_te
 **Crate:** `runtime-core`
 **Arquivo:** `crates/runtime-core/src/cpu_timer.rs`
 
-- [ ] Usar `libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID)` para medir CPU real
-- [ ] Manter wall-clock como fallback em plataformas sem suporte
-- [ ] Documentar diferença entre CPU time e wall-clock time
-- [ ] Adicionar benchmarks comparando ambas abordagens
+- [x] Usar `libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID)` para medir CPU real
+- [x] Manter wall-clock como fallback em plataformas sem suporte
+- [x] Documentar diferença entre CPU time e wall-clock time
+- [x] Adicionar benchmarks comparando ambas abordagens
+
+**Status:** ✅ Concluído
+
+Nota: benchmark comparativo adicionado como teste `#[ignore]` em `crates/runtime-core/src/cpu_timer.rs` (`benchmark_wall_clock_vs_thread_cpu_time`), executável manualmente via `cargo test -p runtime-core benchmark_wall_clock_vs_thread_cpu_time -- --ignored --nocapture`.
 
 ---
 
