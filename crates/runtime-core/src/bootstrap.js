@@ -199,6 +199,28 @@ Object.assign(globalThis, {
   EventSource,
 });
 
+// Install a stable fetch entrypoint that supports test-time mocking without
+// allowing user code to reassign globalThis.fetch.
+const __edgeOriginalFetch = globalThis.fetch;
+if (typeof __edgeOriginalFetch === "function") {
+  if (!Object.prototype.hasOwnProperty.call(globalThis, "__edgeMockFetchHandler")) {
+    Object.defineProperty(globalThis, "__edgeMockFetchHandler", {
+      value: undefined,
+      writable: true,
+      configurable: true,
+      enumerable: false,
+    });
+  }
+
+  globalThis.fetch = function edgeFetchWithMockSupport(input, init) {
+    const hook = globalThis.__edgeMockFetchHandler;
+    if (typeof hook === "function") {
+      return hook(input, init);
+    }
+    return __edgeOriginalFetch(input, init);
+  };
+}
+
 // === SANDBOX SECURITY ===
 // Remove dangerous APIs that should not be available in edge runtime.
 // This ensures code cannot escape the sandbox.

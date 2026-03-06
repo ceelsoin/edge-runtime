@@ -52,10 +52,15 @@ function withMockedFetch(
     throw new Error("globalThis.fetch is not available in this runtime");
   }
 
+  const globals = globalThis as typeof globalThis & {
+    __edgeMockFetchHandler?: typeof fetch;
+  };
+  const previousHook = globals.__edgeMockFetchHandler;
+
   const calls: MockCall[] = [];
   let restored = false;
 
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const mockedFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
     const call: MockCall = { args: [request] };
     calls.push(call);
@@ -70,12 +75,23 @@ function withMockedFetch(
     }
   }) as typeof fetch;
 
+  if ("__edgeMockFetchHandler" in globals) {
+    globals.__edgeMockFetchHandler = mockedFetch;
+  } else {
+    // Fallback for environments that don't provide the bootstrap hook.
+    globalThis.fetch = mockedFetch;
+  }
+
   return {
     calls,
     restore: () => {
       if (restored) return;
       restored = true;
-      globalThis.fetch = originalFetch;
+      if ("__edgeMockFetchHandler" in globals) {
+        globals.__edgeMockFetchHandler = previousHook;
+      } else {
+        globalThis.fetch = originalFetch;
+      }
     },
   };
 }
