@@ -82,6 +82,17 @@ These are consumed mainly by `start` and `watch`:
 - `EDGE_RUNTIME_CPU_TIME_LIMIT_MS`
 - `EDGE_RUNTIME_WALL_CLOCK_TIMEOUT_MS`
 
+**Security Options:**
+- `EDGE_RUNTIME_DISABLE_SSRF_PROTECTION`
+- `EDGE_RUNTIME_ALLOW_PRIVATE_NET`
+
+**Body Size Limits:**
+- `EDGE_RUNTIME_MAX_REQUEST_BODY_SIZE`
+- `EDGE_RUNTIME_MAX_RESPONSE_BODY_SIZE`
+
+**Connection Limits:**
+- `EDGE_RUNTIME_MAX_CONNECTIONS`
+
 **Other:**
 - `EDGE_RUNTIME_RATE_LIMIT`
 - `EDGE_RUNTIME_SOURCE_MAP`
@@ -168,6 +179,60 @@ deno-edge-runtime start [OPTIONS]
 - `--tls-key <PATH>`
   - TLS private key file path for ingress listener (TCP only).
   - Env: `EDGE_RUNTIME_TLS_KEY`
+
+### Security Options
+
+- `--disable-ssrf-protection`
+  - Disable SSRF protection, allowing `fetch()` to access private IP ranges.
+  - Default: `false` (SSRF protection enabled)
+  - **Not recommended for production.**
+  - Env: `EDGE_RUNTIME_DISABLE_SSRF_PROTECTION`
+- `--allow-private-net <CIDR,...>`
+  - Allow specific private subnets despite SSRF protection.
+  - Comma-separated list of CIDR ranges.
+  - Example: `--allow-private-net "10.1.0.0/16,10.2.0.0/16"`
+  - Useful for corporate networks or internal services.
+  - Env: `EDGE_RUNTIME_ALLOW_PRIVATE_NET`
+
+#### SSRF Protection Details
+
+When enabled (default), SSRF protection blocks `fetch()` requests to the following private IP ranges:
+
+| Range | Description |
+|-------|-------------|
+| `127.0.0.0/8` | Loopback addresses |
+| `10.0.0.0/8` | RFC 1918 private network |
+| `172.16.0.0/12` | RFC 1918 private network |
+| `192.168.0.0/16` | RFC 1918 private network |
+| `169.254.0.0/16` | Link-local / Cloud metadata (e.g., AWS, GCP, Azure) |
+| `0.0.0.0/8` | Reserved |
+| `::1/128` | IPv6 loopback |
+| `fc00::/7` | IPv6 unique local |
+| `fe80::/10` | IPv6 link-local |
+
+This prevents functions from accessing sensitive internal endpoints like cloud metadata services (`http://169.254.169.254/`), internal APIs, or localhost services.
+
+### Body Size Limits
+
+- `--max-request-body-size <BYTES>`
+  - Maximum request body size in bytes.
+  - Default: `5242880` (5 MiB)
+  - Requests exceeding this limit receive `413 Payload Too Large`.
+  - Env: `EDGE_RUNTIME_MAX_REQUEST_BODY_SIZE`
+- `--max-response-body-size <BYTES>`
+  - Maximum response body size in bytes.
+  - Default: `10485760` (10 MiB)
+  - Responses exceeding this limit return an error.
+  - Env: `EDGE_RUNTIME_MAX_RESPONSE_BODY_SIZE`
+
+### Connection Limits
+
+- `--max-connections <COUNT>`
+  - Maximum concurrent connections across all listeners.
+  - Default: `10000`
+  - Connections exceeding this limit are dropped immediately.
+  - Protects against resource exhaustion attacks.
+  - Env: `EDGE_RUNTIME_MAX_CONNECTIONS`
 
 ### Common Options
 
@@ -289,6 +354,35 @@ export EDGE_RUNTIME_ADMIN_PORT=9000
 deno-edge-runtime start
 ```
 
+**Production with security hardening:**
+
+```bash
+deno-edge-runtime start \
+  --api-key "$(cat /run/secrets/api-key)" \
+  --port 8080 \
+  --max-heap-mib 256 \
+  --max-request-body-size 1048576 \
+  --max-response-body-size 5242880 \
+  --max-connections 5000
+```
+
+**Corporate network with internal service access:**
+
+```bash
+# Allow fetch() to access internal services on 10.x.x.x
+deno-edge-runtime start \
+  --api-key "secret" \
+  --allow-private-net "10.0.0.0/8"
+```
+
+**Development with SSRF protection disabled:**
+
+```bash
+# Only use in development! Allows fetch() to localhost, metadata endpoints, etc.
+deno-edge-runtime start \
+  --disable-ssrf-protection
+```
+
 ### Behavior Notes
 
 - Both listeners share the same `FunctionRegistry` (deployed functions are available on both).
@@ -297,6 +391,9 @@ deno-edge-runtime start
 - If only one of `--tls-cert` or `--tls-key` is provided, TLS is not enabled.
 - On shutdown, both listeners stop and all deployed functions are shut down.
 - Unix socket file is automatically cleaned up on shutdown.
+- **SSRF Protection**: Enabled by default, blocking `fetch()` to private IPs. Use `--allow-private-net` for exceptions.
+- **Body Limits**: Request/response bodies exceeding limits are rejected to prevent memory exhaustion.
+- **Connection Limits**: Connections exceeding the limit are dropped to prevent resource exhaustion.
 
 ### TLS Configuration
 
@@ -432,6 +529,7 @@ deno-edge-runtime watch [OPTIONS]
 - Converts file paths to function names by joining path segments with `-` and removing extension.
 - First deployment uses `deploy`; existing function names are updated with `update`.
 - Server in watch mode uses immediate shutdown behavior (`graceful_exit_deadline_secs = 0`).
+- **Security in dev mode**: SSRF protection is disabled (allows `fetch()` to private IPs), and default body/connection limits apply.
 
 ### Example
 

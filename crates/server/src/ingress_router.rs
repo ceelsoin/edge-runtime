@@ -8,10 +8,14 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use http::{Request, Response, StatusCode};
-use http_body_util::{BodyExt, Full};
+use http_body_util::Full;
 
 use functions::registry::FunctionRegistry;
 
+use crate::body_limits::{
+    check_content_length, check_response_body_size, collect_body_with_limit,
+    payload_too_large_response, BodyLimitError, BodyLimitsConfig,
+};
 use crate::router::json_response;
 
 type BoxBody = Full<Bytes>;
@@ -23,12 +27,16 @@ type BoxBody = Full<Bytes>;
 #[derive(Clone)]
 pub struct IngressRouter {
     registry: Arc<FunctionRegistry>,
+    body_limits: BodyLimitsConfig,
 }
 
 impl IngressRouter {
     /// Create a new ingress router.
-    pub fn new(registry: Arc<FunctionRegistry>) -> Self {
-        Self { registry }
+    pub fn new(registry: Arc<FunctionRegistry>, body_limits: BodyLimitsConfig) -> Self {
+        Self {
+            registry,
+            body_limits,
+        }
     }
 
     /// Handle an incoming request.
@@ -90,17 +98,29 @@ impl IngressRouter {
             "/".to_string()
         };
 
-        // Collect body bytes
+        // Check Content-Length header for fast rejection
+        if let Err(BodyLimitError::ContentLengthExceeded { .. }) =
+            check_content_length(&req, self.body_limits.max_request_body_bytes)
+        {
+            return payload_too_large_response(self.body_limits.max_request_body_bytes);
+        }
+
+        // Collect body bytes with size limit
         let (parts, body) = req.into_parts();
-        let body_bytes = match body.collect().await {
-            Ok(collected) => collected.to_bytes(),
-            Err(_) => {
-                return json_response(
-                    StatusCode::BAD_REQUEST,
-                    r#"{"error":"failed to read request body"}"#,
-                )
-            }
-        };
+        let body_bytes =
+            match collect_body_with_limit(body, self.body_limits.max_request_body_bytes).await {
+                Ok(bytes) => bytes,
+                Err(BodyLimitError::LimitExceeded)
+                | Err(BodyLimitError::ContentLengthExceeded { .. }) => {
+                    return payload_too_large_response(self.body_limits.max_request_body_bytes);
+                }
+                Err(_) => {
+                    return json_response(
+                        StatusCode::BAD_REQUEST,
+                        r#"{"error":"failed to read request body"}"#,
+                    )
+                }
+            };
 
         // Build forwarded request
         let mut forwarded_req = http::Request::builder()
@@ -120,6 +140,12 @@ impl IngressRouter {
         match tokio::time::timeout(timeout_duration, handle.send_request(forwarded_req)).await {
             Ok(Ok(resp)) => {
                 let (parts, body) = resp.into_parts();
+                // Check response body size
+                if let Some(error_resp) =
+                    check_response_body_size(&body, self.body_limits.max_response_body_bytes)
+                {
+                    return error_resp;
+                }
                 Response::from_parts(parts, Full::new(body))
             }
             Ok(Err(e)) => json_response(

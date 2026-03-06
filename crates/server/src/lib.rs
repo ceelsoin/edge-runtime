@@ -1,4 +1,5 @@
 pub mod admin_router;
+pub mod body_limits;
 pub mod graceful;
 pub mod ingress_router;
 pub mod router;
@@ -13,6 +14,7 @@ use std::time::Duration;
 use anyhow::Error;
 use hyper_util::rt::TokioIo;
 use tokio::net::{TcpListener, UnixListener};
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
@@ -21,6 +23,9 @@ use functions::registry::FunctionRegistry;
 use crate::admin_router::AdminRouter;
 use crate::ingress_router::IngressRouter;
 use crate::service::EdgeService;
+
+// Re-export for convenience
+pub use crate::body_limits::BodyLimitsConfig;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration Types
@@ -32,6 +37,8 @@ pub struct DualServerConfig {
     pub admin: AdminListenerConfig,
     pub ingress: IngressListenerConfig,
     pub graceful_exit_deadline_secs: u64,
+    /// Maximum concurrent connections across all listeners.
+    pub max_connections: usize,
 }
 
 /// Admin listener configuration (TCP only).
@@ -43,6 +50,8 @@ pub struct AdminListenerConfig {
     pub api_key: Option<String>,
     /// Optional TLS configuration.
     pub tls: Option<TlsConfig>,
+    /// Body size limits.
+    pub body_limits: BodyLimitsConfig,
 }
 
 /// Ingress listener configuration (TCP or Unix socket).
@@ -54,6 +63,8 @@ pub struct IngressListenerConfig {
     pub tls: Option<TlsConfig>,
     /// Rate limit in requests per second.
     pub rate_limit_rps: Option<u64>,
+    /// Body size limits.
+    pub body_limits: BodyLimitsConfig,
 }
 
 /// Ingress listener type.
@@ -72,6 +83,10 @@ pub struct ServerConfig {
     pub tls: Option<TlsConfig>,
     pub rate_limit_rps: Option<u64>,
     pub graceful_exit_deadline_secs: u64,
+    /// Body size limits.
+    pub body_limits: BodyLimitsConfig,
+    /// Maximum concurrent connections.
+    pub max_connections: usize,
 }
 
 /// TLS configuration.
@@ -102,15 +117,29 @@ pub async fn run_dual_server(
         );
     }
 
-    // Create routers with shared registry
-    let admin_router = AdminRouter::new(registry.clone(), config.admin.api_key.clone());
-    let ingress_router = IngressRouter::new(registry.clone());
+    // Create connection semaphore shared across all listeners
+    let connection_semaphore = Arc::new(Semaphore::new(config.max_connections));
+    info!(
+        "connection limit set to {} concurrent connections",
+        config.max_connections
+    );
+
+    // Create routers with shared registry and body limits
+    let admin_router = AdminRouter::new(
+        registry.clone(),
+        config.admin.api_key.clone(),
+        config.admin.body_limits,
+    );
+    let ingress_router = IngressRouter::new(registry.clone(), config.ingress.body_limits);
 
     // Spawn admin listener
     let admin_shutdown = shutdown.clone();
     let admin_config = config.admin.clone();
+    let admin_semaphore = connection_semaphore.clone();
     let admin_handle = tokio::spawn(async move {
-        if let Err(e) = run_admin_listener(admin_config, admin_router, admin_shutdown).await {
+        if let Err(e) =
+            run_admin_listener(admin_config, admin_router, admin_shutdown, admin_semaphore).await
+        {
             error!("admin listener error: {}", e);
         }
     });
@@ -118,8 +147,11 @@ pub async fn run_dual_server(
     // Spawn ingress listener
     let ingress_shutdown = shutdown.clone();
     let ingress_config = config.ingress.clone();
+    let ingress_semaphore = connection_semaphore.clone();
     let ingress_handle = tokio::spawn(async move {
-        if let Err(e) = run_ingress_listener(ingress_config, ingress_router, ingress_shutdown).await
+        if let Err(e) =
+            run_ingress_listener(ingress_config, ingress_router, ingress_shutdown, ingress_semaphore)
+                .await
         {
             error!("ingress listener error: {}", e);
         }
@@ -150,6 +182,7 @@ async fn run_admin_listener(
     config: AdminListenerConfig,
     router: AdminRouter,
     shutdown: CancellationToken,
+    connection_semaphore: Arc<Semaphore>,
 ) -> Result<(), Error> {
     let listener = TcpListener::bind(config.addr).await?;
 
@@ -173,9 +206,22 @@ async fn run_admin_listener(
             accepted = listener.accept() => {
                 match accepted {
                     Ok((stream, peer_addr)) => {
+                        // Try to acquire connection permit
+                        let permit = match connection_semaphore.clone().try_acquire_owned() {
+                            Ok(permit) => permit,
+                            Err(_) => {
+                                warn!("admin: connection limit reached, rejecting {}", peer_addr);
+                                drop(stream);
+                                continue;
+                            }
+                        };
+
                         let svc = svc.clone();
                         let tls_acceptor = tls_acceptor.clone();
                         tokio::spawn(async move {
+                            // Permit is held for the duration of this task
+                            let _permit = permit;
+
                             let maybe_stream = if let Some(acceptor) = tls_acceptor {
                                 match acceptor.accept(stream).await {
                                     Ok(tls_stream) => tls::MaybeHttpsStream::TcpTls(tls_stream),
@@ -217,12 +263,15 @@ async fn run_ingress_listener(
     config: IngressListenerConfig,
     router: IngressRouter,
     shutdown: CancellationToken,
+    connection_semaphore: Arc<Semaphore>,
 ) -> Result<(), Error> {
     match config.listener_type {
         IngressListenerType::Tcp(addr) => {
-            run_tcp_ingress(addr, config.tls, router, shutdown).await
+            run_tcp_ingress(addr, config.tls, router, shutdown, connection_semaphore).await
         }
-        IngressListenerType::Unix(path) => run_unix_ingress(path, router, shutdown).await,
+        IngressListenerType::Unix(path) => {
+            run_unix_ingress(path, router, shutdown, connection_semaphore).await
+        }
     }
 }
 
@@ -232,6 +281,7 @@ async fn run_tcp_ingress(
     tls_config: Option<TlsConfig>,
     router: IngressRouter,
     shutdown: CancellationToken,
+    connection_semaphore: Arc<Semaphore>,
 ) -> Result<(), Error> {
     let listener = TcpListener::bind(addr).await?;
 
@@ -255,9 +305,22 @@ async fn run_tcp_ingress(
             accepted = listener.accept() => {
                 match accepted {
                     Ok((stream, peer_addr)) => {
+                        // Try to acquire connection permit
+                        let permit = match connection_semaphore.clone().try_acquire_owned() {
+                            Ok(permit) => permit,
+                            Err(_) => {
+                                warn!("ingress: connection limit reached, rejecting {}", peer_addr);
+                                drop(stream);
+                                continue;
+                            }
+                        };
+
                         let svc = svc.clone();
                         let tls_acceptor = tls_acceptor.clone();
                         tokio::spawn(async move {
+                            // Permit is held for the duration of this task
+                            let _permit = permit;
+
                             let maybe_stream = if let Some(acceptor) = tls_acceptor {
                                 match acceptor.accept(stream).await {
                                     Ok(tls_stream) => tls::MaybeHttpsStream::TcpTls(tls_stream),
@@ -299,6 +362,7 @@ async fn run_unix_ingress(
     path: PathBuf,
     router: IngressRouter,
     shutdown: CancellationToken,
+    connection_semaphore: Arc<Semaphore>,
 ) -> Result<(), Error> {
     // Clean up stale socket file if exists
     if path.exists() {
@@ -316,8 +380,21 @@ async fn run_unix_ingress(
             accepted = listener.accept() => {
                 match accepted {
                     Ok((stream, _addr)) => {
+                        // Try to acquire connection permit
+                        let permit = match connection_semaphore.clone().try_acquire_owned() {
+                            Ok(permit) => permit,
+                            Err(_) => {
+                                warn!("unix ingress: connection limit reached, rejecting connection");
+                                drop(stream);
+                                continue;
+                            }
+                        };
+
                         let svc = svc.clone();
                         tokio::spawn(async move {
+                            // Permit is held for the duration of this task
+                            let _permit = permit;
+
                             let maybe_stream = tls::MaybeHttpsStream::Unix(stream);
                             let io = TokioIo::new(maybe_stream);
                             let conn = hyper_util::server::conn::auto::Builder::new(
@@ -361,10 +438,17 @@ pub async fn run_server(
     registry: Arc<FunctionRegistry>,
     shutdown: CancellationToken,
 ) -> Result<(), Error> {
-    let router = router::Router::new(registry);
+    let router = router::Router::new(registry, config.body_limits);
     let svc = service::EdgeService::new(router);
 
     let listener = TcpListener::bind(config.addr).await?;
+
+    // Create connection semaphore
+    let connection_semaphore = Arc::new(Semaphore::new(config.max_connections));
+    info!(
+        "connection limit set to {} concurrent connections",
+        config.max_connections
+    );
 
     // Optional TLS acceptor
     let tls_acceptor = if let Some(ref tls_config) = config.tls {
@@ -381,9 +465,22 @@ pub async fn run_server(
             accepted = listener.accept() => {
                 match accepted {
                     Ok((stream, peer_addr)) => {
+                        // Try to acquire connection permit
+                        let permit = match connection_semaphore.clone().try_acquire_owned() {
+                            Ok(permit) => permit,
+                            Err(_) => {
+                                warn!("connection limit reached, rejecting {}", peer_addr);
+                                drop(stream);
+                                continue;
+                            }
+                        };
+
                         let svc = svc.clone();
                         let tls_acceptor = tls_acceptor.clone();
                         tokio::spawn(async move {
+                            // Permit is held for the duration of this task
+                            let _permit = permit;
+
                             let maybe_stream = if let Some(acceptor) = tls_acceptor {
                                 match acceptor.accept(stream).await {
                                     Ok(tls_stream) => tls::MaybeHttpsStream::TcpTls(tls_stream),

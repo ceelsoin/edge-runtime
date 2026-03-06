@@ -5,10 +5,14 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use http::{Method, Request, Response, StatusCode};
-use http_body_util::{BodyExt, Full};
+use http_body_util::Full;
 
 use functions::registry::FunctionRegistry;
 
+use crate::body_limits::{
+    check_content_length, collect_body_with_limit, payload_too_large_response, BodyLimitError,
+    BodyLimitsConfig,
+};
 use crate::router::json_response;
 
 type BoxBody = Full<Bytes>;
@@ -22,6 +26,7 @@ type BoxBody = Full<Bytes>;
 pub struct AdminRouter {
     registry: Arc<FunctionRegistry>,
     api_key: Option<String>,
+    body_limits: BodyLimitsConfig,
 }
 
 impl AdminRouter {
@@ -29,8 +34,17 @@ impl AdminRouter {
     ///
     /// - `registry`: Shared function registry
     /// - `api_key`: Optional API key for authentication (None = no auth)
-    pub fn new(registry: Arc<FunctionRegistry>, api_key: Option<String>) -> Self {
-        Self { registry, api_key }
+    /// - `body_limits`: Body size limits configuration
+    pub fn new(
+        registry: Arc<FunctionRegistry>,
+        api_key: Option<String>,
+        body_limits: BodyLimitsConfig,
+    ) -> Self {
+        Self {
+            registry,
+            api_key,
+            body_limits,
+        }
     }
 
     /// Handle an incoming request.
@@ -175,6 +189,13 @@ impl AdminRouter {
 
     /// Handle POST /_internal/functions (deploy)
     async fn handle_deploy(&self, req: Request<hyper::body::Incoming>) -> Response<BoxBody> {
+        // Check Content-Length header for fast rejection
+        if let Err(BodyLimitError::ContentLengthExceeded { .. }) =
+            check_content_length(&req, self.body_limits.max_request_body_bytes)
+        {
+            return payload_too_large_response(self.body_limits.max_request_body_bytes);
+        }
+
         let (parts, body) = req.into_parts();
 
         let function_name = parts
@@ -190,15 +211,20 @@ impl AdminRouter {
             );
         };
 
-        let body_bytes = match body.collect().await {
-            Ok(collected) => collected.to_bytes(),
-            Err(_) => {
-                return json_response(
-                    StatusCode::BAD_REQUEST,
-                    r#"{"error":"failed to read request body"}"#,
-                )
-            }
-        };
+        let body_bytes =
+            match collect_body_with_limit(body, self.body_limits.max_request_body_bytes).await {
+                Ok(bytes) => bytes,
+                Err(BodyLimitError::LimitExceeded)
+                | Err(BodyLimitError::ContentLengthExceeded { .. }) => {
+                    return payload_too_large_response(self.body_limits.max_request_body_bytes);
+                }
+                Err(_) => {
+                    return json_response(
+                        StatusCode::BAD_REQUEST,
+                        r#"{"error":"failed to read request body"}"#,
+                    )
+                }
+            };
 
         if body_bytes.is_empty() {
             return json_response(
@@ -256,9 +282,25 @@ impl AdminRouter {
 
             // PUT /_internal/functions/{name}
             (Method::PUT, None) => {
+                // Check Content-Length header for fast rejection
+                if let Err(BodyLimitError::ContentLengthExceeded { .. }) =
+                    check_content_length(&req, self.body_limits.max_request_body_bytes)
+                {
+                    return payload_too_large_response(self.body_limits.max_request_body_bytes);
+                }
+
                 let (_, body) = req.into_parts();
-                let body_bytes = match body.collect().await {
-                    Ok(collected) => collected.to_bytes(),
+                let body_bytes = match collect_body_with_limit(
+                    body,
+                    self.body_limits.max_request_body_bytes,
+                )
+                .await
+                {
+                    Ok(bytes) => bytes,
+                    Err(BodyLimitError::LimitExceeded)
+                    | Err(BodyLimitError::ContentLengthExceeded { .. }) => {
+                        return payload_too_large_response(self.body_limits.max_request_body_bytes);
+                    }
                     Err(_) => {
                         return json_response(
                             StatusCode::BAD_REQUEST,

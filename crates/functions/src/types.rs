@@ -296,6 +296,7 @@ mod tests {
             eszip_bytes: Bytes::new(),
             bundle_format: BundleFormat::Eszip,
             isolate_handle: None,
+            inspector_stop: None,
             status: FunctionStatus::Running,
             config: IsolateConfig::default(),
             metrics,

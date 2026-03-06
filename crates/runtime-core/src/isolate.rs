@@ -4,6 +4,8 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::ssrf::SsrfConfig;
+
 /// Configuration for creating a new function isolate.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IsolateConfig {
@@ -30,6 +32,10 @@ pub struct IsolateConfig {
     /// If true, inline source maps from eszip modules into loaded JS.
     #[serde(default = "default_enable_source_maps")]
     pub enable_source_maps: bool,
+
+    /// SSRF protection configuration.
+    #[serde(default)]
+    pub ssrf_config: SsrfConfig,
 }
 
 fn default_max_heap() -> usize {
@@ -57,6 +63,7 @@ impl Default for IsolateConfig {
             inspect_port: None,
             inspect_brk: false,
             enable_source_maps: default_enable_source_maps(),
+            ssrf_config: SsrfConfig::default(),
         }
     }
 }
@@ -130,6 +137,7 @@ mod tests {
         assert_eq!(config.inspect_port, None);
         assert!(!config.inspect_brk);
         assert!(config.enable_source_maps);
+        assert!(config.ssrf_config.enabled);
     }
 
     #[test]
@@ -141,6 +149,7 @@ mod tests {
         assert_eq!(config.inspect_port, None);
         assert!(!config.inspect_brk);
         assert!(config.enable_source_maps);
+        assert!(config.ssrf_config.enabled);
     }
 
     #[test]
@@ -165,6 +174,7 @@ mod tests {
         assert!(json.contains("\"inspect_port\""));
         assert!(json.contains("\"inspect_brk\""));
         assert!(json.contains("\"enable_source_maps\""));
+        assert!(json.contains("\"ssrf_config\""));
     }
 
     #[test]

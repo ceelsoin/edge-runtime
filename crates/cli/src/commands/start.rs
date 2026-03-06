@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use runtime_core::isolate::IsolateConfig;
+use runtime_core::ssrf::SsrfConfig;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum SourceMapMode {
@@ -63,6 +64,36 @@ pub struct StartArgs {
     tls_key: Option<String>,
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Security Options
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Disable SSRF protection (allows fetch to private IPs) - NOT recommended for production
+    #[arg(long, default_value_t = false, env = "EDGE_RUNTIME_DISABLE_SSRF_PROTECTION")]
+    disable_ssrf_protection: bool,
+
+    /// Allow specific private subnets despite SSRF protection (comma-separated CIDRs).
+    /// Example: --allow-private-net "10.1.0.0/16,10.2.0.0/16"
+    #[arg(long, value_delimiter = ',', env = "EDGE_RUNTIME_ALLOW_PRIVATE_NET")]
+    allow_private_net: Vec<String>,
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Body Size Limits
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Maximum request body size in bytes (default: 5242880 = 5 MiB)
+    #[arg(long, default_value_t = 5 * 1024 * 1024, env = "EDGE_RUNTIME_MAX_REQUEST_BODY_SIZE")]
+    max_request_body_size: usize,
+
+    /// Maximum response body size in bytes (default: 10485760 = 10 MiB)
+    #[arg(long, default_value_t = 10 * 1024 * 1024, env = "EDGE_RUNTIME_MAX_RESPONSE_BODY_SIZE")]
+    max_response_body_size: usize,
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Connection Limits
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Maximum concurrent connections across all listeners (default: 10000)
+    #[arg(long, default_value_t = 10_000, env = "EDGE_RUNTIME_MAX_CONNECTIONS")]
+    max_connections: usize,
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Common Options
     // ─────────────────────────────────────────────────────────────────────────
     /// Rate limit (requests per second, 0 = unlimited)
@@ -111,6 +142,26 @@ pub fn run(args: StartArgs) -> Result<(), anyhow::Error> {
     runtime.block_on(async {
         let shutdown = CancellationToken::new();
 
+        // Build SSRF config
+        let ssrf_config = if args.disable_ssrf_protection {
+            tracing::warn!(
+                "SSRF protection disabled - fetch can access private IPs. \
+                 This is NOT recommended for production."
+            );
+            SsrfConfig::disabled()
+        } else {
+            if !args.allow_private_net.is_empty() {
+                info!(
+                    "SSRF protection enabled with exceptions: {:?}",
+                    args.allow_private_net
+                );
+                SsrfConfig::with_exceptions(args.allow_private_net.clone())
+            } else {
+                info!("SSRF protection enabled (blocking private IP ranges)");
+                SsrfConfig::new()
+            }
+        };
+
         let default_config = IsolateConfig {
             max_heap_size_bytes: (args.max_heap_mib as usize) * 1024 * 1024,
             cpu_time_limit_ms: args.cpu_time_limit_ms,
@@ -118,6 +169,7 @@ pub fn run(args: StartArgs) -> Result<(), anyhow::Error> {
             inspect_port: None,
             inspect_brk: false,
             enable_source_maps: matches!(args.sourcemap, SourceMapMode::Inline),
+            ssrf_config,
         };
 
         let registry = Arc::new(functions::registry::FunctionRegistry::new(
@@ -128,6 +180,12 @@ pub fn run(args: StartArgs) -> Result<(), anyhow::Error> {
         // Spawn signal handler
         let shutdown_signal = shutdown.clone();
         tokio::spawn(edge_server::graceful::wait_for_shutdown_signal(shutdown_signal));
+
+        // Build body limits config
+        let body_limits = edge_server::BodyLimitsConfig {
+            max_request_body_bytes: args.max_request_body_size,
+            max_response_body_bytes: args.max_response_body_size,
+        };
 
         // Build admin listener config
         let admin_addr: SocketAddr =
@@ -167,6 +225,7 @@ pub fn run(args: StartArgs) -> Result<(), anyhow::Error> {
                 addr: admin_addr,
                 api_key: args.api_key,
                 tls: admin_tls,
+                body_limits,
             },
             ingress: edge_server::IngressListenerConfig {
                 listener_type: ingress_type,
@@ -176,8 +235,10 @@ pub fn run(args: StartArgs) -> Result<(), anyhow::Error> {
                 } else {
                     None
                 },
+                body_limits,
             },
             graceful_exit_deadline_secs: args.graceful_exit_timeout,
+            max_connections: args.max_connections,
         };
 
         info!("starting deno-edge-runtime");

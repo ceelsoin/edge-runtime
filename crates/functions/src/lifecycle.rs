@@ -18,7 +18,7 @@ use tungstenite::{Message, WebSocket};
 use runtime_core::extensions;
 use runtime_core::isolate::{determine_root_specifier, IsolateConfig, IsolateHandle, IsolateRequest};
 use runtime_core::module_loader::EszipModuleLoader;
-use runtime_core::permissions::create_permissions_container;
+use runtime_core::permissions::create_permissions_with_ssrf_protection;
 
 use crate::handler;
 use crate::types::*;
@@ -357,7 +357,9 @@ async fn load_from_eszip_with_init(
     // Put permissions into the op_state for extensions
     {
         let op_state = js_runtime.op_state();
-        op_state.borrow_mut().put(create_permissions_container());
+        op_state
+            .borrow_mut()
+            .put(create_permissions_with_ssrf_protection(&config.ssrf_config));
     }
 
     // Register the request handler bridge in the JS global scope

@@ -192,6 +192,7 @@ pub fn run(args: WatchArgs) -> Result<(), anyhow::Error> {
             inspect_port: None,
             inspect_brk: args.inspect_brk,
             enable_source_maps: true,
+            ssrf_config: runtime_core::ssrf::SsrfConfig::disabled(), // Dev mode: allow all network
         };
 
         let registry = Arc::new(functions::registry::FunctionRegistry::new(
@@ -209,6 +210,8 @@ pub fn run(args: WatchArgs) -> Result<(), anyhow::Error> {
             rate_limit_rps: None,
             // Watch mode favors fast feedback and instant cancellation.
             graceful_exit_deadline_secs: 0,
+            body_limits: edge_server::BodyLimitsConfig::default(),
+            max_connections: 10_000,
         };
 
         info!("starting edge runtime in watch mode on {}", addr);
@@ -361,6 +364,7 @@ async fn load_and_deploy_functions(
             inspect_port,
             inspect_brk: default_config.inspect_brk,
             enable_source_maps: default_config.enable_source_maps,
+            ssrf_config: default_config.ssrf_config.clone(),
         };
 
         match bundle_file(file_path).await {
