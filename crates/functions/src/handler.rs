@@ -17,7 +17,7 @@ use deno_core::JsRuntime;
 /// Or we can override `Deno.serve` to do this automatically.
 pub fn inject_request_bridge(js_runtime: &mut JsRuntime) -> Result<(), Error> {
     js_runtime.execute_script(
-        "<edge-runtime-bootstrap>",
+        "edge-internal:///runtime_bridge.js",
         deno_core::ascii_str!(
             r#"
             globalThis.__edgeRuntime = {
@@ -158,27 +158,74 @@ pub async fn dispatch_request(
 
     let body = request.into_body();
 
-    // Build the JS call
-    let call_script = format!(
-        r#"globalThis.__edgeRuntime.handleRequest("{method}", "{uri}", '{headers_json}', {body_arg})"#,
-        method = method.replace('"', r#"\""#),
-        uri = uri.replace('"', r#"\""#),
-        headers_json = headers_json.replace('\'', r"\'").replace('\n', ""),
-        body_arg = if body.is_empty() {
-            "null".to_string()
+    // Call globalThis.__edgeRuntime.handleRequest(...) directly via V8 API,
+    // avoiding dynamic execute_script frames on every request.
+    let result_global = {
+        let context = js_runtime.main_context();
+        let isolate = js_runtime.v8_isolate();
+        let mut handle_scope = deno_core::v8::HandleScope::new(isolate);
+        let mut handle_scope = {
+            let pinned = unsafe { std::pin::Pin::new_unchecked(&mut handle_scope) };
+            pinned.init()
+        };
+        let scope = &mut handle_scope;
+        let context = deno_core::v8::Local::new(scope, context);
+        let scope = &mut deno_core::v8::ContextScope::new(scope, context);
+
+        let global = context.global(scope);
+        let edge_runtime_key = deno_core::v8::String::new(scope, "__edgeRuntime")
+            .ok_or_else(|| anyhow::anyhow!("failed to allocate __edgeRuntime key"))?;
+        let edge_runtime_val = global
+            .get(scope, edge_runtime_key.into())
+            .ok_or_else(|| anyhow::anyhow!("globalThis.__edgeRuntime is missing"))?;
+        let edge_runtime_obj = edge_runtime_val
+            .to_object(scope)
+            .ok_or_else(|| anyhow::anyhow!("globalThis.__edgeRuntime is not an object"))?;
+
+        let handle_request_key = deno_core::v8::String::new(scope, "handleRequest")
+            .ok_or_else(|| anyhow::anyhow!("failed to allocate handleRequest key"))?;
+        let handle_request_val = edge_runtime_obj
+            .get(scope, handle_request_key.into())
+            .ok_or_else(|| anyhow::anyhow!("__edgeRuntime.handleRequest is missing"))?;
+        let handle_request_fn = deno_core::v8::Local::<deno_core::v8::Function>::try_from(handle_request_val)
+            .map_err(|_| anyhow::anyhow!("__edgeRuntime.handleRequest is not a function"))?;
+
+        let method_v8 = deno_core::v8::String::new(scope, &method)
+            .ok_or_else(|| anyhow::anyhow!("failed to allocate method string"))?;
+        let uri_v8 = deno_core::v8::String::new(scope, &uri)
+            .ok_or_else(|| anyhow::anyhow!("failed to allocate uri string"))?;
+        let headers_v8 = deno_core::v8::String::new(scope, &headers_json)
+            .ok_or_else(|| anyhow::anyhow!("failed to allocate headers string"))?;
+
+        let body_arg: deno_core::v8::Local<deno_core::v8::Value> = if body.is_empty() {
+            deno_core::v8::null(scope).into()
         } else {
-            // Pass body as a Uint8Array-compatible value
-            format!(
-                "new TextEncoder().encode('{}')",
-                String::from_utf8_lossy(&body).replace('\'', r"\'").replace('\n', r"\n")
-            )
-        },
-    );
+            let backing_store = deno_core::v8::ArrayBuffer::new_backing_store_from_boxed_slice(
+                body.to_vec().into_boxed_slice(),
+            );
+            let backing_store = backing_store.make_shared();
+            let array_buffer = deno_core::v8::ArrayBuffer::with_backing_store(scope, &backing_store);
+            let uint8 = deno_core::v8::Uint8Array::new(scope, array_buffer, 0, body.len())
+                .ok_or_else(|| anyhow::anyhow!("failed to allocate Uint8Array body"))?;
+            uint8.into()
+        };
 
-    let result = js_runtime.execute_script("<dispatch>", call_script)?;
+        let args: [deno_core::v8::Local<deno_core::v8::Value>; 4] = [
+            method_v8.into(),
+            uri_v8.into(),
+            headers_v8.into(),
+            body_arg,
+        ];
 
-    // The result is a Promise, we need to resolve it
-    let resolved = js_runtime.resolve(result);
+        let result = handle_request_fn
+            .call(scope, edge_runtime_obj.into(), &args)
+            .ok_or_else(|| anyhow::anyhow!("failed to call __edgeRuntime.handleRequest"))?;
+
+        deno_core::v8::Global::new(scope, result)
+    };
+
+    // The result is a Promise, we need to resolve it.
+    let resolved = js_runtime.resolve(result_global);
 
     // Run the event loop to resolve the promise
     js_runtime
