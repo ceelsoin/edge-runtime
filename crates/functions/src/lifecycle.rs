@@ -24,9 +24,10 @@ use runtime_core::extensions;
 use runtime_core::isolate::{
     determine_root_specifier, IsolateConfig, IsolateHandle, IsolateRequest,
 };
+use runtime_core::manifest::ResolvedFunctionManifest;
 use runtime_core::mem_check::{near_heap_limit_callback, HeapLimitState};
 use runtime_core::module_loader::EszipModuleLoader;
-use runtime_core::permissions::create_permissions_with_ssrf_protection;
+use runtime_core::permissions::create_permissions_with_policy;
 
 use crate::handler;
 use crate::types::*;
@@ -69,6 +70,7 @@ pub async fn create_function(
     name: String,
     bundle_data: Vec<u8>,
     config: IsolateConfig,
+    manifest: Option<ResolvedFunctionManifest>,
     parent_shutdown: CancellationToken,
 ) -> Result<FunctionEntry, Error> {
     // Parse the bundle package
@@ -132,6 +134,7 @@ pub async fn create_function(
     // Spawn the isolate supervisor on a dedicated thread (JsRuntime is !Send)
     let isolate_name = name.clone();
     let isolate_config = config.clone();
+    let isolate_manifest = manifest.clone();
     let isolate_metrics = metrics.clone();
     let bundle_format = bundle_package.format;
     let snapshot_bytes = if bundle_package.format == BundleFormat::Snapshot {
@@ -162,6 +165,7 @@ pub async fn create_function(
                             eszip.clone(),
                             root_specifier.clone(),
                             isolate_config.clone(),
+                            isolate_manifest.clone(),
                             &mut request_rx,
                             shutdown.clone(),
                             isolate_metrics.clone(),
@@ -245,6 +249,7 @@ pub async fn create_function(
         inspector_stop,
         status: FunctionStatus::Running,
         config,
+        manifest,
         metrics,
         created_at: now,
         updated_at: now,
@@ -258,6 +263,7 @@ async fn run_isolate(
     eszip: Arc<eszip::EszipV2>,
     root_specifier: deno_core::ModuleSpecifier,
     config: IsolateConfig,
+    manifest: Option<ResolvedFunctionManifest>,
     request_rx: &mut mpsc::UnboundedReceiver<IsolateRequest>,
     shutdown: CancellationToken,
     metrics: Arc<FunctionMetrics>,
@@ -280,13 +286,26 @@ async fn run_isolate(
                         Ok(rt) => (rt, None),
                         Err(e) => {
                             warn!("failed to load snapshot: {}, trying fallback eszip", e);
-                            load_from_eszip_with_init(&eszip, &root_specifier, &config, &name)
+                            load_from_eszip_with_init(
+                                &eszip,
+                                &root_specifier,
+                                &config,
+                                manifest.as_ref(),
+                                &name,
+                            )
                                 .await?
                         }
                     }
                 } else {
                     info!("snapshot data missing, loading from eszip");
-                    load_from_eszip_with_init(&eszip, &root_specifier, &config, &name).await?
+                    load_from_eszip_with_init(
+                        &eszip,
+                        &root_specifier,
+                        &config,
+                        manifest.as_ref(),
+                        &name,
+                    )
+                    .await?
                 }
             } else {
                 warn!(
@@ -294,11 +313,25 @@ async fn run_isolate(
                     v8_version,
                     deno_core::v8::VERSION_STRING
                 );
-                load_from_eszip_with_init(&eszip, &root_specifier, &config, &name).await?
+                load_from_eszip_with_init(
+                    &eszip,
+                    &root_specifier,
+                    &config,
+                    manifest.as_ref(),
+                    &name,
+                )
+                .await?
             }
         }
         BundleFormat::Eszip => {
-            load_from_eszip_with_init(&eszip, &root_specifier, &config, &name).await?
+            load_from_eszip_with_init(
+                &eszip,
+                &root_specifier,
+                &config,
+                manifest.as_ref(),
+                &name,
+            )
+            .await?
         }
     };
 
@@ -608,6 +641,7 @@ async fn load_from_eszip_with_init(
     eszip: &Arc<eszip::EszipV2>,
     root_specifier: &deno_core::ModuleSpecifier,
     config: &IsolateConfig,
+    manifest: Option<&ResolvedFunctionManifest>,
     function_name: &str,
 ) -> Result<(JsRuntime, Option<*mut HeapLimitState>), Error> {
     // Set up V8 heap limits
@@ -655,10 +689,27 @@ async fn load_from_eszip_with_init(
 
     // Put permissions into the op_state for extensions
     {
+        let mut env_allow = None;
+        let mut net_allow = None;
+        if let Some(policy) = manifest {
+            let mut merged_env = policy.env_allow.clone();
+            for secret_name in &policy.env_secret_refs {
+                if !merged_env.iter().any(|name| name == secret_name) {
+                    merged_env.push(secret_name.clone());
+                }
+            }
+            env_allow = Some(merged_env);
+            net_allow = Some(policy.network_allow.clone());
+        }
+
         let op_state = js_runtime.op_state();
         op_state
             .borrow_mut()
-            .put(create_permissions_with_ssrf_protection(&config.ssrf_config));
+            .put(create_permissions_with_policy(
+                &config.ssrf_config,
+                net_allow,
+                env_allow,
+            ));
     }
 
     // Register the request handler bridge in the JS global scope

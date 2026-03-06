@@ -32,6 +32,7 @@ pub fn inject_request_bridge(js_runtime: &mut JsRuntime) -> Result<(), Error> {
                 _intervalRegistry: new Map(),    // executionId -> Set<intervalId>
                 _abortRegistry: new Map(),       // executionId -> Set<AbortController>
                 _promiseRegistry: new Map(),     // executionId -> Set<{promise, reject}>
+                _lastBlockedNetworkLog: null,
 
                 startExecution(executionId) {
                     this._currentExecutionId = executionId;
@@ -138,6 +139,33 @@ pub fn inject_request_bridge(js_runtime: &mut JsRuntime) -> Result<(), Error> {
                     }
                     return promise;
                 },
+
+                _isBlockedNetworkError(error) {
+                    const message = String(error?.message || error || '').toLowerCase();
+                    return (
+                        message.includes('requires net access') ||
+                        (message.includes('permission') && message.includes('net')) ||
+                        message.includes('blocked by permission')
+                    );
+                },
+
+                _requestTarget(input) {
+                    try {
+                        if (typeof input === 'string') return input;
+                        if (input instanceof URL) return input.toString();
+                        if (input && typeof input.url === 'string') return input.url;
+                        return String(input);
+                    } catch (_) {
+                        return '<unknown>';
+                    }
+                },
+
+                _logBlockedNetworkRequest(input, error) {
+                    const target = this._requestTarget(input);
+                    const message = String(error?.message || error || 'unknown error');
+                    this._lastBlockedNetworkLog = { target, message };
+                    console.warn(`[edge-runtime] blocked outbound request target='${target}' reason='${message}'`);
+                },
             };
 
             // Store original functions
@@ -209,9 +237,18 @@ pub fn inject_request_bridge(js_runtime: &mut JsRuntime) -> Result<(), Error> {
             globalThis.fetch = function(input, init = {}) {
                 const execId = globalThis.__edgeRuntime._currentExecutionId;
 
+                const invokeFetch = (requestInput, requestInit) => {
+                    return globalThis.__originalFetch(requestInput, requestInit).catch((error) => {
+                        if (globalThis.__edgeRuntime._isBlockedNetworkError(error)) {
+                            globalThis.__edgeRuntime._logBlockedNetworkRequest(requestInput, error);
+                        }
+                        throw error;
+                    });
+                };
+
                 // If no execution context, just call original fetch
                 if (!execId) {
-                    return globalThis.__originalFetch(input, init);
+                    return invokeFetch(input, init);
                 }
 
                 // Create AbortController if not provided
@@ -224,7 +261,7 @@ pub fn inject_request_bridge(js_runtime: &mut JsRuntime) -> Result<(), Error> {
                     globalThis.__edgeRuntime._trackAbortController(controller);
                 } else if (signal.aborted) {
                     // Already aborted, just call original
-                    return globalThis.__originalFetch(input, init);
+                    return invokeFetch(input, init);
                 } else {
                     // User provided signal, wrap it with our controller
                     controller = new AbortController();
@@ -239,7 +276,7 @@ pub fn inject_request_bridge(js_runtime: &mut JsRuntime) -> Result<(), Error> {
                     globalThis.__edgeRuntime._trackAbortController(controller);
                 }
 
-                const fetchPromise = globalThis.__originalFetch(input, { ...init, signal });
+                const fetchPromise = invokeFetch(input, { ...init, signal });
 
                 // Untrack controller when fetch completes (success or error)
                 fetchPromise.finally(() => {
@@ -601,5 +638,58 @@ mod tests {
             503,
             "should return 503 when no handler registered"
         );
+    }
+
+    #[test]
+    fn blocked_network_error_detection_matches_permission_errors() {
+        let mut runtime = make_runtime();
+        inject_request_bridge(&mut runtime).expect("inject_request_bridge failed");
+
+        let val = runtime
+            .execute_script(
+                "<test>",
+                deno_core::ascii_str!(
+                    "globalThis.__edgeRuntime._isBlockedNetworkError(new Error('Requires net access to \\\"169.254.169.254\\\"'))"
+                ),
+            )
+            .unwrap();
+
+        deno_core::scope!(scope, runtime);
+        let local = val.open(scope);
+        assert!(local.is_true());
+    }
+
+    #[test]
+    fn fetch_wrapper_logs_blocked_requests() {
+        let mut runtime = make_runtime();
+        inject_request_bridge(&mut runtime).expect("inject_request_bridge failed");
+
+        runtime
+            .execute_script(
+                "<test>",
+                deno_core::ascii_str!(
+                    r#"
+                    const err = new Error('Requires net access to "169.254.169.254"');
+                    globalThis.__edgeRuntime._logBlockedNetworkRequest(
+                        'http://169.254.169.254/latest/meta-data',
+                        err,
+                    );
+                    "#
+                ),
+            )
+            .unwrap();
+
+        let val = runtime
+            .execute_script(
+                "<test>",
+                deno_core::ascii_str!(
+                    "globalThis.__edgeRuntime._lastBlockedNetworkLog?.target === 'http://169.254.169.254/latest/meta-data'"
+                ),
+            )
+            .unwrap();
+
+        deno_core::scope!(scope, runtime);
+        let local = val.open(scope);
+        assert!(local.is_true(), "expected warning log for blocked request");
     }
 }

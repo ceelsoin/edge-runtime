@@ -2,6 +2,10 @@
 
 This document describes the `edge-cli` crate command-line interface exposed by the `deno-edge-runtime` binary.
 
+Related docs:
+
+- [Function Manifest (v1)](./function-manifest.md)
+
 ## Binary
 
 - Crate: `crates/cli` (`edge-cli`)
@@ -533,7 +537,11 @@ deno-edge-runtime watch [OPTIONS]
 - Converts file paths to function names by joining path segments with `-` and removing extension.
 - First deployment uses `deploy`; existing function names are updated with `update`.
 - Server in watch mode uses immediate shutdown behavior (`graceful_exit_deadline_secs = 0`).
-- **Security in dev mode**: SSRF protection is disabled (allows `fetch()` to private IPs), and default body/connection limits apply.
+- **Network behavior in watch mode**:
+  - SSRF protection is disabled.
+  - No private/public network filtering is applied by default (all outbound network is allowed).
+  - Function manifest network allowlist is not attached by watch auto-deploy (functions are deployed without manifest).
+  - If a request is blocked by runtime permissions for any reason, the runtime emits a warning log with target and error.
 - Inspector binds to `127.0.0.1` by default.
 - Enabling inspector logs a security warning because debugger endpoints should not be exposed in production.
 

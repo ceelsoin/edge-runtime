@@ -2,6 +2,8 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use bytes::Bytes;
 use http::{Method, Request, Response, StatusCode};
 use http_body_util::Full;
@@ -121,6 +123,48 @@ where
         context
     );
     client_error_response(status, ClientError::InternalError, &request_id)
+}
+
+fn parse_manifest_from_headers(
+    headers: &http::header::HeaderMap,
+) -> Result<Option<runtime_core::manifest::ResolvedFunctionManifest>, Response<BoxBody>> {
+    let encoded_manifest = headers
+        .get("x-function-manifest-b64")
+        .and_then(|v| v.to_str().ok());
+
+    let profile = headers
+        .get("x-function-manifest-profile")
+        .and_then(|v| v.to_str().ok());
+
+    let Some(encoded_manifest) = encoded_manifest else {
+        return Ok(None);
+    };
+
+    let manifest_bytes = STANDARD.decode(encoded_manifest).map_err(|_| {
+        json_response(
+            StatusCode::BAD_REQUEST,
+            r#"{"error":"invalid x-function-manifest-b64: expected base64"}"#,
+        )
+    })?;
+
+    let manifest_json = std::str::from_utf8(&manifest_bytes).map_err(|_| {
+        json_response(
+            StatusCode::BAD_REQUEST,
+            r#"{"error":"invalid x-function-manifest-b64: decoded payload is not UTF-8 JSON"}"#,
+        )
+    })?;
+
+    runtime_core::manifest::parse_validate_and_resolve_manifest(manifest_json, profile)
+        .map(Some)
+        .map_err(|e| {
+            json_response(
+                StatusCode::BAD_REQUEST,
+                &format!(
+                    r#"{{"error":"invalid function manifest","details":{:?}}}"#,
+                    e.to_string()
+                ),
+            )
+        })
 }
 
 pub fn client_error_response(
@@ -398,6 +442,20 @@ impl Router {
             );
         };
 
+        let resolved_manifest = match parse_manifest_from_headers(&parts.headers) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+
+        if let Some(policy) = &resolved_manifest {
+            if policy.name != name {
+                return json_response(
+                    StatusCode::BAD_REQUEST,
+                    r#"{"error":"manifest name must match x-function-name"}"#,
+                );
+            }
+        }
+
         let body_bytes =
             match collect_body_with_limit(body, self.body_limits.max_request_body_bytes).await {
                 Ok(bytes) => bytes,
@@ -417,7 +475,11 @@ impl Router {
             return json_response(StatusCode::BAD_REQUEST, r#"{"error":"empty eszip bundle"}"#);
         }
 
-        match self.registry.deploy(name, body_bytes, None).await {
+        match self
+            .registry
+            .deploy(name, body_bytes, None, resolved_manifest)
+            .await
+        {
             Ok(info) => {
                 let json = serde_json::to_string(&info).unwrap_or_default();
                 json_response(StatusCode::CREATED, &json)
@@ -487,7 +549,19 @@ impl Router {
                     return payload_too_large_response(self.body_limits.max_request_body_bytes);
                 }
 
-                let (_, body) = req.into_parts();
+                let (parts, body) = req.into_parts();
+                let resolved_manifest = match parse_manifest_from_headers(&parts.headers) {
+                    Ok(value) => value,
+                    Err(response) => return response,
+                };
+                if let Some(policy) = &resolved_manifest {
+                    if policy.name != name {
+                        return json_response(
+                            StatusCode::BAD_REQUEST,
+                            r#"{"error":"manifest name must match function route name"}"#,
+                        );
+                    }
+                }
                 let body_bytes =
                     match collect_body_with_limit(body, self.body_limits.max_request_body_bytes)
                         .await
@@ -507,7 +581,11 @@ impl Router {
                         }
                     };
 
-                match self.registry.update(name, body_bytes, None).await {
+                match self
+                    .registry
+                    .update(name, body_bytes, None, resolved_manifest)
+                    .await
+                {
                     Ok(info) => {
                         let json = serde_json::to_string(&info).unwrap_or_default();
                         json_response(StatusCode::OK, &json)

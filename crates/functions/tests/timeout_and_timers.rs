@@ -252,6 +252,7 @@ fn test_isolate_timeout_returns_504() {
             "timeout-504-test".to_string(),
             bundle_data,
             config,
+            None,
             CancellationToken::new(),
         )
         .await
@@ -332,6 +333,7 @@ fn test_heap_limit_infinite_allocation_marks_function_error() {
                 "heap-limit-test".to_string(),
                 bytes::Bytes::from(bundle_data),
                 Some(config),
+                None,
             )
             .await
             .map_err(|e| format!("deploy: {e}"))?;
@@ -432,6 +434,7 @@ fn test_panic_followed_by_request_marks_error_and_fails_fast() {
                 "panic-recovery-test".to_string(),
                 bytes::Bytes::from(bundle_data),
                 None,
+                None,
             )
             .await
             .map_err(|e| format!("deploy: {e}"))?;
@@ -531,6 +534,7 @@ fn test_graceful_shutdown_with_in_flight_request() {
             .deploy(
                 "shutdown-inflight-test".to_string(),
                 bytes::Bytes::from(bundle_data),
+                None,
                 None,
             )
             .await

@@ -205,16 +205,7 @@ pub fn run(args: WatchArgs) -> Result<(), anyhow::Error> {
         let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
         let shutdown = CancellationToken::new();
 
-        let default_config = IsolateConfig {
-            max_heap_size_bytes: (args.max_heap_mib as usize) * 1024 * 1024,
-            cpu_time_limit_ms: args.cpu_time_limit_ms,
-            wall_clock_timeout_ms: args.wall_clock_timeout_ms,
-            inspect_port: None,
-            inspect_brk: args.inspect_brk,
-            inspect_allow_remote: args.inspect_allow_remote,
-            enable_source_maps: true,
-            ssrf_config: runtime_core::ssrf::SsrfConfig::disabled(), // Dev mode: allow all network
-        };
+        let default_config = build_watch_default_config(&args);
 
         if let Some(base_port) = args.inspect {
             warn!(
@@ -410,6 +401,7 @@ async fn load_and_deploy_functions(
                         func_name.clone(),
                         bytes.clone(),
                         Some(function_config.clone()),
+                        None,
                     )
                     .await
                 {
@@ -428,7 +420,12 @@ async fn load_and_deploy_functions(
                     Err(e) if e.to_string().contains("already exists") => {
                         // Try to update instead
                         match registry
-                            .update(&func_name, bytes.clone(), Some(function_config.clone()))
+                            .update(
+                                &func_name,
+                                bytes.clone(),
+                                Some(function_config.clone()),
+                                None,
+                            )
                             .await
                         {
                             Ok(_) => {
@@ -545,5 +542,47 @@ fn path_to_function_name(path: &Path) -> String {
     } else {
         // Use all parts, joining with dashes
         parts.join("-")
+    }
+}
+
+fn build_watch_default_config(args: &WatchArgs) -> IsolateConfig {
+    IsolateConfig {
+        max_heap_size_bytes: (args.max_heap_mib as usize) * 1024 * 1024,
+        cpu_time_limit_ms: args.cpu_time_limit_ms,
+        wall_clock_timeout_ms: args.wall_clock_timeout_ms,
+        inspect_port: None,
+        inspect_brk: args.inspect_brk,
+        inspect_allow_remote: args.inspect_allow_remote,
+        enable_source_maps: true,
+        // Watch mode is local-dev oriented: do not enforce SSRF network denylist.
+        ssrf_config: runtime_core::ssrf::SsrfConfig::disabled(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn watch_default_config_disables_ssrf_protection() {
+        let args = WatchArgs {
+            path: ".".to_string(),
+            host: "0.0.0.0".to_string(),
+            port: 9000,
+            interval: 1000,
+            max_heap_mib: 128,
+            cpu_time_limit_ms: 50_000,
+            wall_clock_timeout_ms: 60_000,
+            inspect: None,
+            inspect_brk: false,
+            inspect_allow_remote: false,
+        };
+
+        let cfg = build_watch_default_config(&args);
+        assert!(
+            !cfg.ssrf_config.enabled,
+            "watch mode must allow all network by default"
+        );
+        assert!(cfg.ssrf_config.allow_private_subnets.is_empty());
     }
 }

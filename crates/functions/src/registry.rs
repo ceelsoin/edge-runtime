@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use runtime_core::isolate::IsolateConfig;
+use runtime_core::manifest::ResolvedFunctionManifest;
 
 use crate::lifecycle;
 use crate::types::*;
@@ -18,6 +19,21 @@ pub struct FunctionRegistry {
 }
 
 impl FunctionRegistry {
+    fn apply_manifest_resources(config: &mut IsolateConfig, manifest: &ResolvedFunctionManifest) {
+        if let Some(max_heap_mi_b) = manifest.resources.max_heap_mi_b {
+            let max_bytes = (max_heap_mi_b as usize).saturating_mul(1024 * 1024);
+            config.max_heap_size_bytes = max_bytes;
+        }
+
+        if let Some(cpu_time_ms) = manifest.resources.cpu_time_ms {
+            config.cpu_time_limit_ms = cpu_time_ms;
+        }
+
+        if let Some(wall_clock_timeout_ms) = manifest.resources.wall_clock_timeout_ms {
+            config.wall_clock_timeout_ms = wall_clock_timeout_ms;
+        }
+    }
+
     fn all_request_channels_closed(&self) -> bool {
         self.functions.iter().all(|entry| {
             entry
@@ -62,6 +78,7 @@ impl FunctionRegistry {
         name: String,
         eszip_bytes: Bytes,
         config: Option<IsolateConfig>,
+        manifest: Option<ResolvedFunctionManifest>,
     ) -> Result<FunctionInfo, Error> {
         if self.functions.contains_key(&name) {
             return Err(anyhow::anyhow!(
@@ -70,7 +87,10 @@ impl FunctionRegistry {
             ));
         }
 
-        let config = config.unwrap_or_else(|| self.default_config.clone());
+        let mut config = config.unwrap_or_else(|| self.default_config.clone());
+        if let Some(policy) = &manifest {
+            Self::apply_manifest_resources(&mut config, policy);
+        }
 
         info!("deploying function '{}'", name);
 
@@ -78,6 +98,7 @@ impl FunctionRegistry {
             name.clone(),
             eszip_bytes.to_vec(),
             config,
+            manifest,
             self.global_shutdown.child_token(),
         )
         .await?;
@@ -137,14 +158,25 @@ impl FunctionRegistry {
         name: &str,
         eszip_bytes: Bytes,
         config: Option<IsolateConfig>,
+        manifest: Option<ResolvedFunctionManifest>,
     ) -> Result<FunctionInfo, Error> {
+        let old_config = self.functions.get(name).map(|entry| entry.config.clone());
+        let old_manifest = self.functions.get(name).and_then(|entry| entry.manifest.clone());
+
         // Destroy the old entry
         if let Some((_, old_entry)) = self.functions.remove(name) {
             info!("shutting down old isolate for function '{}'", name);
             lifecycle::destroy_function(&old_entry).await;
         }
 
-        let config = config.unwrap_or_else(|| self.default_config.clone());
+        let config = config
+            .or(old_config)
+            .unwrap_or_else(|| self.default_config.clone());
+        let manifest = manifest.or(old_manifest);
+        let mut config = config;
+        if let Some(policy) = &manifest {
+            Self::apply_manifest_resources(&mut config, policy);
+        }
 
         info!("deploying updated function '{}'", name);
 
@@ -152,6 +184,7 @@ impl FunctionRegistry {
             name.to_string(),
             eszip_bytes.to_vec(),
             config,
+            manifest,
             self.global_shutdown.child_token(),
         )
         .await?;
@@ -187,6 +220,11 @@ impl FunctionRegistry {
             .map(|entry| entry.config.clone())
             .unwrap_or_default();
 
+        let manifest = self
+            .functions
+            .get(name)
+            .and_then(|entry| entry.manifest.clone());
+
         // Destroy old, recreate from same bytes
         if let Some((_, old_entry)) = self.functions.remove(name) {
             lifecycle::destroy_function(&old_entry).await;
@@ -198,6 +236,7 @@ impl FunctionRegistry {
             name.to_string(),
             eszip_bytes.to_vec(),
             config,
+            manifest,
             self.global_shutdown.child_token(),
         )
         .await?;
@@ -347,6 +386,7 @@ mod tests {
             inspector_stop: None,
             status: FunctionStatus::Running,
             config: IsolateConfig::default(),
+            manifest: None,
             metrics: Arc::new(FunctionMetrics::default()),
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -383,6 +423,7 @@ mod tests {
             inspector_stop: None,
             status: FunctionStatus::Running,
             config: IsolateConfig::default(),
+            manifest: None,
             metrics: Arc::new(FunctionMetrics::default()),
             created_at: Utc::now(),
             updated_at: Utc::now(),

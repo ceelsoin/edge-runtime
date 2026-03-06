@@ -1,0 +1,557 @@
+use std::collections::HashMap;
+use std::net::IpAddr;
+
+use anyhow::Error;
+use ipnet::IpNet;
+use jsonschema::{Draft, Resource, Validator};
+use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::ssrf::DEFAULT_DENY_RANGES;
+
+const COMMON_SCHEMA_URI: &str = "https://edge-runtime.dev/schemas/base/common.schema.json";
+const NETWORK_SCHEMA_URI: &str = "https://edge-runtime.dev/schemas/base/network.schema.json";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FunctionManifest {
+    pub manifest_version: u32,
+    pub name: String,
+    pub entrypoint: String,
+    #[serde(default)]
+    pub env: Option<ManifestEnv>,
+    pub network: ManifestNetwork,
+    #[serde(default)]
+    pub resources: Option<ManifestResources>,
+    #[serde(default)]
+    pub auth: Option<ManifestAuth>,
+    #[serde(default)]
+    pub observability: Option<ManifestObservability>,
+    #[serde(default)]
+    pub profiles: HashMap<String, ManifestProfile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestEnv {
+    #[serde(default)]
+    pub allow: Vec<String>,
+    #[serde(default)]
+    pub secret_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestNetwork {
+    pub mode: String,
+    pub allow: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestResources {
+    pub max_heap_mi_b: Option<u64>,
+    pub cpu_time_ms: Option<u64>,
+    pub wall_clock_timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestAuth {
+    pub verify_jwt: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestObservability {
+    pub log_level: Option<String>,
+    pub trace_sample_percent: Option<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestProfile {
+    #[serde(default)]
+    pub env: Option<ManifestProfileEnv>,
+    #[serde(default)]
+    pub network: Option<ManifestProfileNetwork>,
+    #[serde(default)]
+    pub resources: Option<ManifestResources>,
+    #[serde(default)]
+    pub auth: Option<ManifestAuth>,
+    #[serde(default)]
+    pub observability: Option<ManifestObservability>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestProfileEnv {
+    #[serde(default)]
+    pub allow: Option<Vec<String>>,
+    #[serde(default)]
+    pub secret_refs: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestProfileNetwork {
+    #[serde(default)]
+    pub allow: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedFunctionManifest {
+    pub manifest_version: u32,
+    pub name: String,
+    pub entrypoint: String,
+    pub selected_profile: Option<String>,
+    pub env_allow: Vec<String>,
+    pub env_secret_refs: Vec<String>,
+    pub network_allow: Vec<String>,
+    pub resources: ManifestResources,
+    pub auth: ManifestAuth,
+    pub observability: ManifestObservability,
+}
+
+#[derive(Debug, Clone)]
+enum ParsedNetworkTarget {
+    Host(String),
+    Ip(IpAddr),
+    Cidr(IpNet),
+}
+
+#[derive(Debug, Clone)]
+enum DenyRule {
+    Ip(IpAddr),
+    Cidr(IpNet),
+}
+
+static DENY_RULES: Lazy<Vec<DenyRule>> = Lazy::new(|| {
+    DEFAULT_DENY_RANGES
+        .iter()
+        .filter_map(|raw| {
+            let normalized = raw.trim().trim_start_matches('[').trim_end_matches(']');
+            if let Ok(ip) = normalized.parse::<IpAddr>() {
+                return Some(DenyRule::Ip(ip));
+            }
+            if let Ok(cidr) = normalized.parse::<IpNet>() {
+                return Some(DenyRule::Cidr(cidr));
+            }
+            None
+        })
+        .collect()
+});
+
+static MANIFEST_VALIDATOR: Lazy<Validator> = Lazy::new(|| {
+    let common_schema: Value =
+        serde_json::from_str(include_str!("../../../schemas/base/common.schema.json"))
+            .expect("valid common schema JSON");
+    let network_schema: Value =
+        serde_json::from_str(include_str!("../../../schemas/base/network.schema.json"))
+            .expect("valid network schema JSON");
+    let manifest_schema: Value = serde_json::from_str(include_str!(
+        "../../../schemas/function-manifest.v1.schema.json"
+    ))
+    .expect("valid manifest schema JSON");
+
+    let mut options = jsonschema::options().with_draft(Draft::Draft202012);
+    options = options.with_resource(
+        COMMON_SCHEMA_URI,
+        Resource::from_contents(common_schema).expect("valid common schema resource"),
+    );
+    options = options.with_resource(
+        NETWORK_SCHEMA_URI,
+        Resource::from_contents(network_schema).expect("valid network schema resource"),
+    );
+
+    options
+        .build(&manifest_schema)
+        .expect("valid manifest validator")
+});
+
+pub fn validate_manifest_json(manifest_json: &str) -> Result<FunctionManifest, Error> {
+    let manifest_value: Value = serde_json::from_str(manifest_json)
+        .map_err(|e| anyhow::anyhow!("manifest is not valid JSON: {e}"))?;
+
+    let schema_errors: Vec<String> = MANIFEST_VALIDATOR
+        .iter_errors(&manifest_value)
+        .map(|err| err.to_string())
+        .collect();
+    if !schema_errors.is_empty() {
+        return Err(anyhow::anyhow!(
+            "manifest schema validation failed: {}",
+            schema_errors.join("; ")
+        ));
+    }
+
+    let manifest: FunctionManifest = serde_json::from_value(manifest_value)
+        .map_err(|e| anyhow::anyhow!("manifest parsing failed after schema validation: {e}"))?;
+
+    validate_manifest_semantics(&manifest)?;
+
+    Ok(manifest)
+}
+
+pub fn parse_validate_and_resolve_manifest(
+    manifest_json: &str,
+    profile: Option<&str>,
+) -> Result<ResolvedFunctionManifest, Error> {
+    let manifest = validate_manifest_json(manifest_json)?;
+    resolve_manifest_for_profile(&manifest, profile)
+}
+
+pub fn resolve_manifest_for_profile(
+    manifest: &FunctionManifest,
+    profile: Option<&str>,
+) -> Result<ResolvedFunctionManifest, Error> {
+    let selected_profile = if let Some(profile_name) = profile {
+        if !manifest.profiles.contains_key(profile_name) {
+            return Err(anyhow::anyhow!(
+                "manifest profile '{}' was not found",
+                profile_name
+            ));
+        }
+        Some(profile_name.to_string())
+    } else {
+        None
+    };
+
+    let profile = selected_profile
+        .as_ref()
+        .and_then(|profile_name| manifest.profiles.get(profile_name));
+
+    let mut env = manifest.env.clone().unwrap_or_default();
+    let mut network_allow = manifest.network.allow.clone();
+    let mut resources = manifest.resources.clone().unwrap_or_default();
+    let mut auth = manifest.auth.clone().unwrap_or_default();
+    let mut observability = manifest.observability.clone().unwrap_or_default();
+
+    if let Some(profile_overrides) = profile {
+        if let Some(profile_env) = &profile_overrides.env {
+            if let Some(allow) = &profile_env.allow {
+                env.allow = allow.clone();
+            }
+            if let Some(secret_refs) = &profile_env.secret_refs {
+                env.secret_refs = secret_refs.clone();
+            }
+        }
+
+        if let Some(profile_network) = &profile_overrides.network {
+            if let Some(allow) = &profile_network.allow {
+                network_allow = allow.clone();
+            }
+        }
+
+        if let Some(profile_resources) = &profile_overrides.resources {
+            if let Some(max_heap_mi_b) = profile_resources.max_heap_mi_b {
+                resources.max_heap_mi_b = Some(max_heap_mi_b);
+            }
+            if let Some(cpu_time_ms) = profile_resources.cpu_time_ms {
+                resources.cpu_time_ms = Some(cpu_time_ms);
+            }
+            if let Some(wall_clock_timeout_ms) = profile_resources.wall_clock_timeout_ms {
+                resources.wall_clock_timeout_ms = Some(wall_clock_timeout_ms);
+            }
+        }
+
+        if let Some(profile_auth) = &profile_overrides.auth {
+            if let Some(verify_jwt) = profile_auth.verify_jwt {
+                auth.verify_jwt = Some(verify_jwt);
+            }
+        }
+
+        if let Some(profile_observability) = &profile_overrides.observability {
+            if let Some(log_level) = &profile_observability.log_level {
+                observability.log_level = Some(log_level.clone());
+            }
+            if let Some(trace_sample_percent) = profile_observability.trace_sample_percent {
+                observability.trace_sample_percent = Some(trace_sample_percent);
+            }
+        }
+    }
+
+    validate_network_targets(&network_allow)?;
+
+    Ok(ResolvedFunctionManifest {
+        manifest_version: manifest.manifest_version,
+        name: manifest.name.clone(),
+        entrypoint: manifest.entrypoint.clone(),
+        selected_profile,
+        env_allow: dedupe_preserve_order(&env.allow),
+        env_secret_refs: dedupe_preserve_order(&env.secret_refs),
+        network_allow: dedupe_preserve_order(&network_allow),
+        resources,
+        auth,
+        observability,
+    })
+}
+
+fn dedupe_preserve_order(values: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut result = Vec::new();
+    for value in values {
+        if seen.insert(value.clone()) {
+            result.push(value.clone());
+        }
+    }
+    result
+}
+
+fn validate_manifest_semantics(manifest: &FunctionManifest) -> Result<(), Error> {
+    validate_network_targets(&manifest.network.allow)?;
+
+    for (profile_name, profile) in &manifest.profiles {
+        if let Some(profile_network) = &profile.network {
+            if let Some(allow) = &profile_network.allow {
+                validate_network_targets(allow).map_err(|e| {
+                    anyhow::anyhow!(
+                        "profile '{}' has invalid network.allow entry: {}",
+                        profile_name,
+                        e
+                    )
+                })?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_network_targets(targets: &[String]) -> Result<(), Error> {
+    for target in targets {
+        if target == "*" {
+            return Err(anyhow::anyhow!(
+                "wildcard '*' is not allowed in network.allow"
+            ));
+        }
+
+        let parsed = parse_network_target(target)?;
+        if collides_with_denylist(&parsed) {
+            return Err(anyhow::anyhow!(
+                "network.allow target '{}' collides with internal denylist",
+                target
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_network_target(raw_target: &str) -> Result<ParsedNetworkTarget, Error> {
+    let target = raw_target.trim();
+    if target.is_empty() {
+        return Err(anyhow::anyhow!("empty network target"));
+    }
+
+    let core = strip_optional_port(target)?;
+
+    if let Ok(cidr) = core.parse::<IpNet>() {
+        return Ok(ParsedNetworkTarget::Cidr(cidr));
+    }
+
+    if let Ok(ip) = core.parse::<IpAddr>() {
+        return Ok(ParsedNetworkTarget::Ip(ip));
+    }
+
+    let host = core.to_ascii_lowercase();
+    if host.chars().any(char::is_whitespace) {
+        return Err(anyhow::anyhow!("host cannot contain whitespace"));
+    }
+
+    Ok(ParsedNetworkTarget::Host(host))
+}
+
+fn strip_optional_port(target: &str) -> Result<String, Error> {
+    if target.starts_with('[') {
+        let close_idx = target
+            .find(']')
+            .ok_or_else(|| anyhow::anyhow!("invalid bracketed target '{}'", target))?;
+
+        let core = &target[1..close_idx];
+        let remainder = &target[close_idx + 1..];
+        if !remainder.is_empty() {
+            let port = remainder
+                .strip_prefix(':')
+                .ok_or_else(|| anyhow::anyhow!("invalid port syntax in '{}'", target))?;
+            validate_port(port)?;
+        }
+
+        return Ok(core.to_string());
+    }
+
+    if let Some((host_or_ip, maybe_port)) = target.rsplit_once(':') {
+        let has_only_one_colon = host_or_ip.find(':').is_none();
+        if has_only_one_colon && maybe_port.chars().all(|c| c.is_ascii_digit()) {
+            validate_port(maybe_port)?;
+            return Ok(host_or_ip.to_string());
+        }
+    }
+
+    Ok(target.to_string())
+}
+
+fn validate_port(port_str: &str) -> Result<(), Error> {
+    let port = port_str
+        .parse::<u16>()
+        .map_err(|_| anyhow::anyhow!("invalid port '{}'", port_str))?;
+    if port == 0 {
+        return Err(anyhow::anyhow!("port 0 is not allowed"));
+    }
+    Ok(())
+}
+
+fn collides_with_denylist(target: &ParsedNetworkTarget) -> bool {
+    match target {
+        ParsedNetworkTarget::Host(host) => host == "localhost" || host == "localhost.",
+        ParsedNetworkTarget::Ip(ip) => DENY_RULES.iter().any(|rule| match rule {
+            DenyRule::Ip(deny_ip) => deny_ip == ip,
+            DenyRule::Cidr(deny_cidr) => deny_cidr.contains(ip),
+        }),
+        ParsedNetworkTarget::Cidr(cidr) => DENY_RULES.iter().any(|rule| match rule {
+            DenyRule::Ip(deny_ip) => cidr.contains(deny_ip),
+            DenyRule::Cidr(deny_cidr) => {
+                deny_cidr.contains(&cidr.network()) || cidr.contains(&deny_cidr.network())
+            }
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_minimal_manifest() {
+                let json = r#"{
+                    "$schema": "https://edge-runtime.dev/schemas/function-manifest.v1.schema.json",
+                    "manifestVersion": 1,
+                    "name": "hello",
+                    "entrypoint": "./index.ts",
+                    "network": {
+                        "mode": "allowlist",
+                        "allow": ["api.example.com:443", "8.8.8.8"]
+                    }
+                }"#;
+
+        let manifest = validate_manifest_json(json).expect("manifest should validate");
+        assert_eq!(manifest.name, "hello");
+    }
+
+    #[test]
+    fn rejects_manifest_with_denylisted_ip() {
+                let json = r#"{
+                    "manifestVersion": 1,
+                    "name": "hello",
+                    "entrypoint": "./index.ts",
+                    "network": {
+                        "mode": "allowlist",
+                        "allow": ["127.0.0.1"]
+                    }
+                }"#;
+
+        let err = validate_manifest_json(json).expect_err("denylisted target must fail");
+        assert!(err.to_string().contains("collides with internal denylist"));
+    }
+
+    #[test]
+    fn rejects_manifest_with_wildcard_allow() {
+                let json = r#"{
+                    "manifestVersion": 1,
+                    "name": "hello",
+                    "entrypoint": "./index.ts",
+                    "network": {
+                        "mode": "allowlist",
+                        "allow": ["*"]
+                    }
+                }"#;
+
+        let err = validate_manifest_json(json).expect_err("wildcard target must fail");
+        assert!(
+            err.to_string().contains("wildcard '*' is not allowed")
+                || err.to_string().contains("schema validation failed")
+        );
+    }
+
+    #[test]
+    fn rejects_manifest_missing_required_network() {
+                let json = r#"{
+                    "manifestVersion": 1,
+                    "name": "hello",
+                    "entrypoint": "./index.ts"
+                }"#;
+
+        let err = validate_manifest_json(json).expect_err("schema should reject");
+        assert!(err.to_string().contains("schema validation failed"));
+    }
+
+    #[test]
+    fn resolves_profile_overrides_for_network_and_resources() {
+        let json = r#"{
+            "manifestVersion": 1,
+            "name": "hello",
+            "entrypoint": "./index.ts",
+            "env": {
+                "allow": ["LOG_LEVEL"],
+                "secretRefs": ["BASE_SECRET"]
+            },
+            "network": {
+                "mode": "allowlist",
+                "allow": ["api.example.com:443"]
+            },
+            "resources": {
+                "maxHeapMiB": 64,
+                "cpuTimeMs": 100,
+                "wallClockTimeoutMs": 200
+            },
+            "profiles": {
+                "prod": {
+                    "env": {
+                        "allow": ["LOG_LEVEL", "FEATURE_FLAG"],
+                        "secretRefs": ["PROD_SECRET"]
+                    },
+                    "network": {
+                        "allow": ["payments.example.com:443"]
+                    },
+                    "resources": {
+                        "maxHeapMiB": 256
+                    }
+                }
+            }
+        }"#;
+
+        let resolved =
+            parse_validate_and_resolve_manifest(json, Some("prod")).expect("must resolve");
+        assert_eq!(resolved.selected_profile.as_deref(), Some("prod"));
+        assert_eq!(resolved.network_allow, vec!["payments.example.com:443"]);
+        assert_eq!(resolved.env_allow, vec!["LOG_LEVEL", "FEATURE_FLAG"]);
+        assert_eq!(resolved.env_secret_refs, vec!["PROD_SECRET"]);
+        assert_eq!(resolved.resources.max_heap_mi_b, Some(256));
+        assert_eq!(resolved.resources.cpu_time_ms, Some(100));
+    }
+
+    #[test]
+    fn rejects_unknown_profile() {
+        let json = r#"{
+            "manifestVersion": 1,
+            "name": "hello",
+            "entrypoint": "./index.ts",
+            "network": {
+                "mode": "allowlist",
+                "allow": ["api.example.com:443"]
+            },
+            "profiles": {
+                "dev": {
+                    "network": {
+                        "allow": ["dev.example.com:443"]
+                    }
+                }
+            }
+        }"#;
+
+        let err = parse_validate_and_resolve_manifest(json, Some("prod"))
+            .expect_err("must reject unknown profile");
+        assert!(err.to_string().contains("was not found"));
+    }
+}

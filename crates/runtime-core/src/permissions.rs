@@ -118,6 +118,22 @@ pub fn create_permissions_with_network_allowlist(
 /// let perms = create_permissions_with_ssrf_protection(&config);
 /// ```
 pub fn create_permissions_with_ssrf_protection(ssrf_config: &SsrfConfig) -> PermissionsContainer {
+    create_permissions_with_policy(ssrf_config, None, None)
+}
+
+/// Creates a PermissionsContainer with SSRF protection plus optional manifest allowlists.
+///
+/// - `network_allowlist`:
+///   - `None` => allow all network destinations except SSRF denylist.
+///   - `Some(vec)` => allow only declared destinations (still denied by SSRF denylist when matching).
+/// - `env_allowlist`:
+///   - `None` => deny env access.
+///   - `Some(vec)` => allow only declared env keys.
+pub fn create_permissions_with_policy(
+    ssrf_config: &SsrfConfig,
+    network_allowlist: Option<Vec<String>>,
+    env_allowlist: Option<Vec<String>>,
+) -> PermissionsContainer {
     let parser = Arc::new(RuntimePermissionDescriptorParser::new(
         sys_traits::impls::RealSys,
     ));
@@ -125,14 +141,20 @@ pub fn create_permissions_with_ssrf_protection(ssrf_config: &SsrfConfig) -> Perm
     // Build deny_net from SSRF config (None if disabled)
     let deny_net = ssrf_config.build_deny_net();
 
-    // allow_net: empty vec means "allow all hosts not in deny_net"
-    // If there are exception subnets, we still use empty vec for allow_net
-    // because Deno's permission system will check deny_net first, then allow_net
-    // for the specific host being accessed.
-    let allow_net = Some(vec![]);
+    let allow_net = match network_allowlist {
+        Some(allowlist) if allowlist.is_empty() => None,
+        Some(allowlist) => Some(allowlist),
+        None => Some(vec![]),
+    };
+
+    let allow_env = match env_allowlist {
+        Some(allowlist) if allowlist.is_empty() => None,
+        Some(allowlist) => Some(allowlist),
+        None => None,
+    };
 
     let options = PermissionsOptions {
-        allow_env: None,
+        allow_env,
         deny_env: None,
         ignore_env: None,
         allow_net,
@@ -205,5 +227,20 @@ mod tests {
             result.is_ok(),
             "expected public host to be allowed with SSRF protection enabled"
         );
+    }
+
+    #[test]
+    fn policy_allowlist_blocks_unknown_hosts() {
+        let mut container = create_permissions_with_policy(
+            &SsrfConfig::default(),
+            Some(vec!["api.example.com:443".to_string()]),
+            None,
+        );
+
+        let allowed_url = Url::parse("https://api.example.com/").unwrap();
+        let blocked_url = Url::parse("https://not-allowed.example.com/").unwrap();
+
+        assert!(container.check_net_url(&allowed_url, "fetch()").is_ok());
+        assert!(container.check_net_url(&blocked_url, "fetch()").is_err());
     }
 }

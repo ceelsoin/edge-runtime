@@ -4,6 +4,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use runtime_core::isolate::{IsolateConfig, IsolateHandle};
+use runtime_core::manifest::ResolvedFunctionManifest;
 use serde::{Deserialize, Serialize};
 
 /// Bundle format for function deployment.
@@ -179,6 +180,8 @@ pub struct FunctionEntry {
     pub status: FunctionStatus,
     /// Runtime configuration.
     pub config: IsolateConfig,
+    /// Optional manifest policy resolved at deploy time.
+    pub manifest: Option<ResolvedFunctionManifest>,
     /// Metrics.
     pub metrics: Arc<FunctionMetrics>,
     /// When the function was deployed.
@@ -311,6 +314,7 @@ mod tests {
             inspector_stop: None,
             status: FunctionStatus::Running,
             config: IsolateConfig::default(),
+            manifest: None,
             metrics,
             created_at: now,
             updated_at: now,

@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://edge-runtime.dev/schemas/function-manifest.v1.schema.json",
+  "title": "Edge Runtime Function Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["manifestVersion", "name", "entrypoint", "network"],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "manifestVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "name": {
+      "$ref": "https://edge-runtime.dev/schemas/base/common.schema.json#/$defs/functionName"
+    },
+    "entrypoint": {
+      "$ref": "https://edge-runtime.dev/schemas/base/common.schema.json#/$defs/nonEmptyString"
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allow": {
+          "type": "array",
+          "items": {
+            "$ref": "https://edge-runtime.dev/schemas/base/common.schema.json#/$defs/envName"
+          },
+          "uniqueItems": true,
+          "default": []
+        },
+        "secretRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "https://edge-runtime.dev/schemas/base/common.schema.json#/$defs/envName"
+          },
+          "uniqueItems": true,
+          "default": []
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "allow"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "const": "allowlist"
+        },
+        "allow": {
+          "type": "array",
+          "items": {
+            "$ref": "https://edge-runtime.dev/schemas/base/network.schema.json#/$defs/target"
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxHeapMiB": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cpuTimeMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "wallClockTimeoutMs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "verifyJwt": {
+          "type": "boolean"
+        }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "logLevel": {
+          "$ref": "https://edge-runtime.dev/schemas/base/common.schema.json#/$defs/logLevel"
+        },
+        "traceSamplePercent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        }
+      }
+    },
+    "profiles": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "env": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "allow": {
+                "type": "array",
+                "items": {
+                  "$ref": "https://edge-runtime.dev/schemas/base/common.schema.json#/$defs/envName"
+                },
+                "uniqueItems": true
+              },
+              "secretRefs": {
+                "type": "array",
+                "items": {
+                  "$ref": "https://edge-runtime.dev/schemas/base/common.schema.json#/$defs/envName"
+                },
+                "uniqueItems": true
+              }
+            }
+          },
+          "network": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "allow": {
+                "type": "array",
+                "items": {
+                  "$ref": "https://edge-runtime.dev/schemas/base/network.schema.json#/$defs/target"
+                },
+                "uniqueItems": true
+              }
+            }
+          },
+          "resources": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "maxHeapMiB": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cpuTimeMs": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "wallClockTimeoutMs": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "auth": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "verifyJwt": {
+                "type": "boolean"
+              }
+            }
+          },
+          "observability": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "logLevel": {
+                "$ref": "https://edge-runtime.dev/schemas/base/common.schema.json#/$defs/logLevel"
+              },
+              "traceSamplePercent": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
