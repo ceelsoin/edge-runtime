@@ -1,6 +1,13 @@
-# deno-edge-runtime
+<p align="center">
+  <img src=".github/assets/logo.svg" alt="Logo" width="400"/>
+</p>
 
-An Edge Runtime written in Rust, based on the Deno ecosystem, to run JavaScript/TypeScript functions with a focus on modern Web APIs, per-function isolation, and CLI-based operations.
+<a href="https://github.com/ceelsoin/edge-runtime/actions/workflows/ci-cd.yml"><img src="https://github.com/ceelsoin/edge-runtime/actions/workflows/ci-cd.yml/badge.svg" /></a>
+
+
+
+
+An Edge Runtime and Ecossystem a.k.a Thunder written in Rust, based on the Deno ecosystem, to run JavaScript/TypeScript functions with a focus on modern Web APIs, per-function isolation, and CLI-based operations with included test framework.
 
 ## Project Goal
 
@@ -11,7 +18,7 @@ This repository implements a runtime for edge/serverless workloads with:
 - dynamic deployment through an internal HTTP API
 - development mode with watch + hot update
 - JS/TS test support through the `edge://assert/*` library
-- basic observability (metrics, health, logs)
+- observability (metrics, health, logs)
 
 The project is organized as a Rust workspace with specialized crates for runtime, function orchestration, HTTP serving, and CLI tooling.
 
@@ -59,7 +66,7 @@ HTTP ingress server and control API:
 - Rust toolchain (recommended via the project's `rust-toolchain.toml`)
 - Cargo
 - Optional: `deno` in `PATH` for TS semantic typecheck in `bundle` and `check`
-- Optional: `k6` for load testing (`docs/load_testing.md`)
+- Optional: `k6` for load testing (see [load_testing.md](docs/load_testing.md))
 
 ## Quick Build
 
@@ -113,16 +120,16 @@ cargo run -- test --path "./tests/js/**/*.ts" --ignore "./tests/js/lib/**"
 cargo run -- check --path "./**/*.{ts,js,mts,mjs,tsx,jsx,cjs,cts}"
 ```
 
-Detailed CLI documentation: `docs/cli.md`.
+Detailed CLI documentation: [docs/cli.md](docs/cli.md).
 
 ## `docs/` Folder Guide
 
-- `docs/cli.md`: full reference for CLI commands (`start`, `bundle`, `watch`, `test`, `check`)
-- `docs/debugging-vscode.md`: debugging with the V8 inspector via VS Code, Chrome DevTools, and Neovim
-- `docs/testing-library.md`: usage guide for the `edge://assert/*` library (assertions, suites, hooks, mocks, snapshots)
-- `docs/testing-api-reference.md`: detailed API reference for test functions
-- `docs/load_testing.md`: methodology and interpretation of load tests with k6
-- `docs/web_standards_api_report.md`: compatibility report for Web APIs supported by the runtime
+- [docs/cli.md](docs/cli.md): full reference for CLI commands (`start`, `bundle`, `watch`, `test`, `check`)
+- [docs/debugging-vscode.md](docs/debugging-vscode.md): debugging with the V8 inspector via VS Code, Chrome DevTools, and Neovim
+- [docs/testing-library.md](docs/testing-library.md): usage guide for the `edge://assert/*` library (assertions, suites, hooks, mocks, snapshots)
+- [docs/testing-api-reference.md](docs/testing-api-reference.md): detailed API reference for test functions
+- [docs/load_testing.md](docs/load_testing.md): methodology and interpretation of load tests with k6
+- [docs/web_standards_api_report.md](docs/web_standards_api_report.md): compatibility report for Web APIs supported by the runtime
 
 ## Internal Runtime API
 
@@ -151,7 +158,7 @@ cargo run -- watch --path ./examples --inspect 9229
 - performs automatic deploy/update
 - can expose a V8 inspector per function
 
-Debug guide: `docs/debugging-vscode.md`.
+Debug guide: [docs/debugging-vscode.md](docs/debugging-vscode.md).
 
 ## Tests
 
@@ -169,8 +176,8 @@ cargo run -- test --path "./tests/js/**/*.ts" --ignore "./tests/js/lib/**"
 
 Testing library references:
 
-- `docs/testing-library.md`
-- `docs/testing-api-reference.md`
+- [docs/testing-library.md](docs/testing-library.md)
+- [docs/testing-api-reference.md](docs/testing-api-reference.md)
 
 ## Benchmarks and Load Testing
 
@@ -185,12 +192,12 @@ Examples:
 
 See also:
 
-- `docs/load_testing.md`
-- `scripts/README.md`
+- [docs/load_testing.md](docs/load_testing.md)
+- [scripts/README.md](scripts/README.md)
 
 ## Web APIs Compatibility
 
-Current report: `docs/web_standards_api_report.md`.
+Current report: [docs/web_standards_api_report.md](docs/web_standards_api_report.md).
 
 Reported summary:
 
@@ -202,8 +209,8 @@ Reported summary:
 
 There is a technical audit and a hardening roadmap in the repository:
 
-- `AUDIT.md`
-- `ROADMAP.md`
+- [AUDIT.md](AUDIT.md)
+- [ROADMAP.md](ROADMAP.md)
 
 Relevant findings from the audit (05/03/2026):
 
@@ -212,7 +219,7 @@ Relevant findings from the audit (05/03/2026):
 - SSRF risk due to permissive network rules in `fetch`
 - no request/response body size limits
 
-Before production use, prioritize Phase 0 items in `ROADMAP.md`.
+Before production use, prioritize Phase 0 items in [ROADMAP.md](ROADMAP.md).
 
 ## Repository Structure
 
@@ -232,3 +239,4 @@ tests/js/        # JS/TS test suites
 ## License
 
 MIT (see workspace `Cargo.toml`).
+

@@ -1,0 +1,27 @@
+<svg width="380" height="180" viewBox="0 0 400 180" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="boltGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F7D046"/>
+      <stop offset="100%" stop-color="#F2A81D"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Lightning Bolt -->
+  <g transform="translate(20,20)">
+    <path
+      d="M70 0 L10 95 L60 95 L30 160 L110 65 L60 65 Z"
+      fill="url(#boltGradient)"
+      stroke="none"
+    />
+  </g>
+
+  <!-- Text -->
+  <g font-family="Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+    <text x="140" y="105" font-size="56" font-weight="700" fill="#222">
+      Thunder
+    </text>
+    <text x="165" y="130" font-size="18" letter-spacing="4" fill="#777">
+      EDGE RUNTIME
+    </text>
+  </g>
+</svg>
