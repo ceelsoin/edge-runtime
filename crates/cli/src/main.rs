@@ -27,6 +27,8 @@ enum Commands {
     Watch(commands::watch::WatchArgs),
     /// Run JavaScript/TypeScript compatibility tests inside the runtime
     Test(commands::test::TestArgs),
+    /// Typecheck TypeScript/JavaScript source files (delegates to deno check)
+    Check(commands::check::CheckArgs),
 }
 
 fn main() -> Result<(), anyhow::Error> {
@@ -56,5 +58,6 @@ fn main() -> Result<(), anyhow::Error> {
         Commands::Bundle(args) => commands::bundle::run(args),
         Commands::Watch(args) => commands::watch::run(args),
         Commands::Test(args) => commands::test::run(args),
+        Commands::Check(args) => commands::check::run(args),
     }
 }

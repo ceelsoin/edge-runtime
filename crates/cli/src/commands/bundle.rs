@@ -9,6 +9,8 @@ use deno_graph::{BuildOptions, GraphKind, ModuleGraph};
 use functions::types::BundlePackage;
 use url::Url;
 
+use super::check::{deno_binary_exists, run_deno_check_for_files, run_syntax_check_for_files_async};
+
 #[derive(Args)]
 pub struct BundleArgs {
     /// Entrypoint TypeScript/JavaScript file
@@ -155,6 +157,18 @@ async fn run_async(args: BundleArgs) -> Result<(), anyhow::Error> {
         .map_err(|()| anyhow::anyhow!("cannot convert path to URL: {}", entrypoint.display()))?;
 
     tracing::info!("bundling '{}' -> '{}'", root_url, args.output);
+
+    // TS semantic typecheck (deno-check-like) before bundling.
+    if matches!(entrypoint.extension().and_then(|e| e.to_str()), Some("ts") | Some("mts") | Some("cts") | Some("tsx")) {
+        if deno_binary_exists() {
+            run_deno_check_for_files(&[entrypoint.clone()])?;
+        } else {
+            eprintln!(
+                "warning: 'deno' binary not found in PATH. Falling back to syntax/module validation only (no TS semantic typecheck)."
+            );
+            run_syntax_check_for_files_async(&[entrypoint.clone()]).await?;
+        }
+    }
 
     // Validate format
     match args.format.as_str() {
