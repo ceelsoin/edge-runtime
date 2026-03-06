@@ -24,6 +24,28 @@ The project is organized as a Rust workspace with specialized crates for runtime
 
 ## Architecture
 
+Request flow in `start` mode (side-by-side):
+
+```mermaid
+sequenceDiagram
+  title Edge Runtime Request Flow (CLI start)
+  participant CL as Client
+  participant CLI as CLI start (crates/cli)
+  participant SV as HTTP Server (crates/server)
+  participant FN as Function Registry (crates/functions)
+  participant RT as Isolated JsRuntime (crates/runtime-core)
+
+  CL->>CLI: HTTP request
+  CLI->>SV: forward request
+  SV->>FN: route by function name
+  FN->>RT: execute handler
+
+  RT-->>FN: response
+  FN-->>SV: response
+  SV-->>CLI: response
+  CLI-->>CL: HTTP response
+```
+
 ### `crates/runtime-core`
 
 Runtime core:
