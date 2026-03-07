@@ -325,12 +325,12 @@ pub fn run(args: StartArgs) -> Result<(), anyhow::Error> {
             max_connections: args.max_connections,
         };
 
-        info!("starting deno-edge-runtime");
+        info!("starting thunder");
 
         // Run the dual-listener server (blocks until shutdown)
         edge_server::run_dual_server(config, registry.clone(), shutdown.clone()).await?;
 
-        info!("deno-edge-runtime stopped");
+        info!("thunder stopped");
         Ok(())
     })
 }

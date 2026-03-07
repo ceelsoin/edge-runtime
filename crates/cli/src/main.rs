@@ -20,7 +20,7 @@ impl From<LogFormat> for telemetry::RuntimeLogFormat {
 
 #[derive(Parser)]
 #[command(
-    name = "deno-edge-runtime",
+    name = "thunder",
     version,
     about = "Deno-based edge function runtime"
 )]

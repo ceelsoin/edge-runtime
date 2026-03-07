@@ -534,7 +534,7 @@ pub async fn run_server(
     } else {
         "http"
     };
-    info!(function_name = "runtime", request_id = "system", "edge-runtime listening on {}://{}", scheme, config.addr);
+    info!(function_name = "runtime", request_id = "system", "thunder listening on {}://{}", scheme, config.addr);
 
     loop {
         tokio::select! {

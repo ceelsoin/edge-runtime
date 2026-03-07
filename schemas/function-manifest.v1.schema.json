@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://edge-runtime.dev/schemas/function-manifest.v1.schema.json",
+  "$id": "https://thunder.dev/schemas/function-manifest.v1.schema.json",
   "title": "Edge Runtime Function Manifest v1",
   "type": "object",
   "additionalProperties": false,
@@ -14,10 +14,10 @@
       "const": 1
     },
     "name": {
-      "$ref": "https://edge-runtime.dev/schemas/base/common.schema.json#/$defs/functionName"
+      "$ref": "https://thunder.dev/schemas/base/common.schema.json#/$defs/functionName"
     },
     "entrypoint": {
-      "$ref": "https://edge-runtime.dev/schemas/base/common.schema.json#/$defs/nonEmptyString"
+      "$ref": "https://thunder.dev/schemas/base/common.schema.json#/$defs/nonEmptyString"
     },
     "env": {
       "type": "object",
@@ -26,7 +26,7 @@
         "allow": {
           "type": "array",
           "items": {
-            "$ref": "https://edge-runtime.dev/schemas/base/common.schema.json#/$defs/envName"
+            "$ref": "https://thunder.dev/schemas/base/common.schema.json#/$defs/envName"
           },
           "uniqueItems": true,
           "default": []
@@ -34,7 +34,7 @@
         "secretRefs": {
           "type": "array",
           "items": {
-            "$ref": "https://edge-runtime.dev/schemas/base/common.schema.json#/$defs/envName"
+            "$ref": "https://thunder.dev/schemas/base/common.schema.json#/$defs/envName"
           },
           "uniqueItems": true,
           "default": []
@@ -53,7 +53,7 @@
         "allow": {
           "type": "array",
           "items": {
-            "$ref": "https://edge-runtime.dev/schemas/base/network.schema.json#/$defs/target"
+            "$ref": "https://thunder.dev/schemas/base/network.schema.json#/$defs/target"
           },
           "uniqueItems": true,
           "minItems": 1
@@ -92,7 +92,7 @@
       "additionalProperties": false,
       "properties": {
         "logLevel": {
-          "$ref": "https://edge-runtime.dev/schemas/base/common.schema.json#/$defs/logLevel"
+          "$ref": "https://thunder.dev/schemas/base/common.schema.json#/$defs/logLevel"
         },
         "traceSamplePercent": {
           "type": "integer",
@@ -117,14 +117,14 @@
               "allow": {
                 "type": "array",
                 "items": {
-                  "$ref": "https://edge-runtime.dev/schemas/base/common.schema.json#/$defs/envName"
+                  "$ref": "https://thunder.dev/schemas/base/common.schema.json#/$defs/envName"
                 },
                 "uniqueItems": true
               },
               "secretRefs": {
                 "type": "array",
                 "items": {
-                  "$ref": "https://edge-runtime.dev/schemas/base/common.schema.json#/$defs/envName"
+                  "$ref": "https://thunder.dev/schemas/base/common.schema.json#/$defs/envName"
                 },
                 "uniqueItems": true
               }
@@ -137,7 +137,7 @@
               "allow": {
                 "type": "array",
                 "items": {
-                  "$ref": "https://edge-runtime.dev/schemas/base/network.schema.json#/$defs/target"
+                  "$ref": "https://thunder.dev/schemas/base/network.schema.json#/$defs/target"
                 },
                 "uniqueItems": true
               }
@@ -175,7 +175,7 @@
             "additionalProperties": false,
             "properties": {
               "logLevel": {
-                "$ref": "https://edge-runtime.dev/schemas/base/common.schema.json#/$defs/logLevel"
+                "$ref": "https://thunder.dev/schemas/base/common.schema.json#/$defs/logLevel"
               },
               "traceSamplePercent": {
                 "type": "integer",

@@ -2,7 +2,7 @@
   <img src=".github/assets/logo.svg" alt="Logo" width="400"/>
 </p>
 
-<a href="https://github.com/ceelsoin/edge-runtime/actions/workflows/ci-cd.yml"><img src="https://github.com/ceelsoin/edge-runtime/actions/workflows/ci-cd.yml/badge.svg" /></a>
+<a href="https://github.com/ceelsoin/thunder/actions/workflows/ci-cd.yml"><img src="https://github.com/ceelsoin/thunder/actions/workflows/ci-cd.yml/badge.svg" /></a>
 
 
 Thunder is a Rust-powered edge runtime and ecosystem built on the Deno stack, designed to run JavaScript and TypeScript functions with modern Web APIs, strong per-function isolation, and a CLI-first workflow with a built-in testing framework. ⚡
@@ -73,7 +73,7 @@ HTTP ingress server and control API:
 
 ### `crates/cli`
 
-`deno-edge-runtime` binary for local and CI usage:
+`thunder` binary for local and CI usage:
 
 - `start`: starts the runtime server
 - `bundle`: generates a serialized ESZIP package

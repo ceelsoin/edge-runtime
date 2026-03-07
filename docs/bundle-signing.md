@@ -41,7 +41,7 @@ Example:
 cargo run -- start \
   --api-key "admin-secret" \
   --require-bundle-signature \
-  --bundle-public-key-path /etc/edge-runtime/keys/bundle-signing-public.pem
+  --bundle-public-key-path /etc/thunder/keys/bundle-signing-public.pem
 ```
 
 By default, signature verification is optional (disabled). It becomes mandatory only when
@@ -153,7 +153,7 @@ curl -X PUT http://127.0.0.1:9000/_internal/functions/hello \
 ### Public key (verification)
 
 - It can live on the runtime host (read-only).
-- Recommended path: `/etc/edge-runtime/keys/` with minimal permissions.
+- Recommended path: `/etc/thunder/keys/` with minimal permissions.
 - Manage via configuration management (Ansible, Terraform, etc.).
 
 ## Recommended rotation process

@@ -76,7 +76,7 @@ If validation fails, response is `400 Bad Request` with an error payload.
 
 ```json
 {
-  "$schema": "https://edge-runtime.dev/schemas/function-manifest.v1.schema.json",
+  "$schema": "https://thunder.dev/schemas/function-manifest.v1.schema.json",
   "manifestVersion": 1,
   "name": "hello",
   "entrypoint": "./index.ts",

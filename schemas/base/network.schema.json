@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://edge-runtime.dev/schemas/base/network.schema.json",
+  "$id": "https://thunder.dev/schemas/base/network.schema.json",
   "title": "Edge Runtime Network Target Types",
   "$defs": {
     "hostname": {

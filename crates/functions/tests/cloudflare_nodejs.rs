@@ -71,7 +71,7 @@ async fn assert_js_true_async(js: &str, desc: &str) {
 
 // ── require() and CommonJS ────────────────────────────────────────
 
-// NOTE: require() and CommonJS are NOT available in current deno-edge-runtime
+// NOTE: require() and CommonJS are NOT available in current thunder
 // Reason: deno_node extension is not loaded
 //
 // Solution: Use ES modules (import/export) instead
@@ -353,7 +353,7 @@ fn nodejs_assert_alternative() {
 
 // ── Summary: Node.js vs Web/Deno APIs ──────────────────────────────
 
-// NOT Available in deno-edge-runtime:
+// NOT Available in thunder:
 // ✗ require() / module.exports (use import/export)
 // ✗ Node.js EventEmitter (use EventTarget)
 // ✗ Node.js Stream (use Web Streams API)

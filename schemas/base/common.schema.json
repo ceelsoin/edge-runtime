@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://edge-runtime.dev/schemas/base/common.schema.json",
+  "$id": "https://thunder.dev/schemas/base/common.schema.json",
   "title": "Edge Runtime Common Types",
   "$defs": {
     "nonEmptyString": {

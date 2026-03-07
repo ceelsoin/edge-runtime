@@ -64,15 +64,15 @@ fi
 echo ""
 
 # Step 3: Start server
-print_section "Step 3/4: Starting deno-edge-runtime server..."
+print_section "Step 3/4: Starting thunder server..."
 SERVER_PID=""
 
 # Kill any existing server
-pkill -f "deno-edge-runtime.*start" 2>/dev/null || true
+pkill -f "thunder.*start" 2>/dev/null || true
 sleep 1
 
 # Start server in background
-"$PROJECT_ROOT/target/release/deno-edge-runtime" start --host 0.0.0.0 --port 9000 > /tmp/edge-runtime.log 2>&1 &
+"$PROJECT_ROOT/target/release/thunder" start --host 0.0.0.0 --port 9000 > /tmp/thunder.log 2>&1 &
 SERVER_PID=$!
 
 echo "Server PID: $SERVER_PID"
@@ -84,7 +84,7 @@ sleep 3
 # Check if server is running
 if ! curl -s -f "http://localhost:9000/_internal/metrics" > /dev/null 2>&1; then
     print_error "Server failed to start"
-    cat /tmp/edge-runtime.log
+    cat /tmp/thunder.log
     exit 1
 fi
 
@@ -124,7 +124,7 @@ echo ""
 echo "📈 Summary:"
 echo "   Total time: ${ELAPSED}s"
 echo "   ESZIP bundles: $PROJECT_ROOT/bundles/eszip"
-echo "   Metrics log: /tmp/edge-runtime.log"
+echo "   Metrics log: /tmp/thunder.log"
 echo ""
 
 print_success "All benchmarks completed!"

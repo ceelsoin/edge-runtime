@@ -7,7 +7,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-CLI_BIN="$PROJECT_ROOT/target/debug/deno-edge-runtime"
+CLI_BIN="$PROJECT_ROOT/target/debug/thunder"
 
 if [ ! -f "$CLI_BIN" ]; then
     echo "❌ Error: $CLI_BIN not found. Please run 'cargo build' first"

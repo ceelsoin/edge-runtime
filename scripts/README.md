@@ -106,7 +106,7 @@ cargo build --release
 #### 2. Start the Server
 
 ```bash
-./target/release/deno-edge-runtime start --host 0.0.0.0 --port 9000
+./target/release/thunder start --host 0.0.0.0 --port 9000
 ```
 
 #### 2.5 (Optional) Sign Bundles for Integrity Verification
@@ -211,7 +211,7 @@ The server exposes metrics at `http://localhost:9000/_internal/metrics`:
 ### "Port 9000 already in use"
 ```bash
 # Kill existing process
-pkill -f "deno-edge-runtime.*start"
+pkill -f "thunder.*start"
 ```
 
 ### "k6 not found"
@@ -225,7 +225,7 @@ docker run -i grafana/k6 run - < ./scripts/load-test.js
 ### Server won't start
 ```bash
 # Check logs
-tail -f /tmp/edge-runtime.log
+tail -f /tmp/thunder.log
 
 # Ensure no other process is using port 9000
 lsof -i :9000
@@ -245,7 +245,7 @@ curl http://localhost:9000/_internal/functions
 After running benchmarks:
 
 - **Bundles**: `./bundles/eszip/`
-- **Server Log**: `/tmp/edge-runtime.log`
+- **Server Log**: `/tmp/thunder.log`
 - **k6 Results**: Displayed in console (HTML report optional with `-o html`)
 
 ## Advanced Usage

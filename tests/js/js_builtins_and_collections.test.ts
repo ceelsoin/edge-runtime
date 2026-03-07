@@ -52,11 +52,11 @@ await runSuite("js-builtins-and-collections", [
   {
     name: "string array object methods",
     run: () => {
-      const str = "edge-runtime".toUpperCase();
+      const str = "thunder".toUpperCase();
       const arr = [1, 2, 3].map((x) => x * 2).filter((x) => x > 2);
       const obj = { a: 1, b: 2 };
 
-      assertEquals(str, "EDGE-RUNTIME");
+      assertEquals(str, "THUNDER");
       assertEquals(arr.join(","), "4,6");
       assertEquals(Object.keys(obj).length, 2);
       assertEquals(Object.entries(obj)[0][0], "a");
@@ -67,11 +67,11 @@ await runSuite("js-builtins-and-collections", [
     run: () => {
       const rounded = Math.round(2.6);
       const date = new Date("2025-01-01T00:00:00.000Z");
-      const re = /edge\-(runtime)/;
+      const re = /thunder/;
 
       assertEquals(rounded, 3);
       assertEquals(date.toISOString(), "2025-01-01T00:00:00.000Z");
-      assert(re.test("edge-runtime"));
+      assert(re.test("thunder"));
     },
   },
 ]);

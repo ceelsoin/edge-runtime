@@ -246,7 +246,7 @@
   "schemaVersion": 39,
   "style": "dark",
   "tags": [
-    "edge-runtime",
+    "thunder",
     "otel",
     "victoriametrics"
   ],
@@ -260,7 +260,7 @@
   "timepicker": {},
   "timezone": "",
   "title": "Edge Runtime - Observability Overview",
-  "uid": "edge-runtime-overview",
+  "uid": "thunder-overview",
   "version": 1,
   "weekStart": ""
 }

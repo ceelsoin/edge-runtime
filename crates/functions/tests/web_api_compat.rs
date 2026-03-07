@@ -800,7 +800,7 @@ fn event_source_properties() {
 
 // ── HTMLRewriter API ───────────────────────────────────────────────
 
-// NOTE: HTMLRewriter is a Cloudflare-specific API and is NOT available in deno-edge-runtime
+// NOTE: HTMLRewriter is a Cloudflare-specific API and is NOT available in thunder
 // It provides HTML parsing and transformation without loading the entire DOM into memory
 //
 // For HTML transformation, alternatives include:

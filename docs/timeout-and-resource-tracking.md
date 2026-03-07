@@ -47,7 +47,7 @@ The runtime implements a comprehensive system to:
 ### CLI Options
 
 ```bash
-deno-edge-runtime start --wall-clock-timeout-ms 60000
+thunder start --wall-clock-timeout-ms 60000
 ```
 
 ### Environment Variables

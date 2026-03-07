@@ -678,7 +678,7 @@ fn start_inspector_server(
 
                     if path == "/json" || path == "/json/list" {
                         let body = format!(
-                            "[{{\"description\":\"deno-edge-runtime\",\"id\":\"edge-runtime\",\"title\":\"edge test runtime\",\"type\":\"node\",\"url\":\"file://{}\",\"webSocketDebuggerUrl\":\"ws://{}:{}/ws\",\"devtoolsFrontendUrl\":\"devtools://devtools/bundled/inspector.html?ws={}:{}/ws\"}}]",
+                            "[{{\"description\":\"thunder\",\"id\":\"thunder\",\"title\":\"edge test runtime\",\"type\":\"node\",\"url\":\"file://{}\",\"webSocketDebuggerUrl\":\"ws://{}:{}/ws\",\"devtoolsFrontendUrl\":\"devtools://devtools/bundled/inspector.html?ws={}:{}/ws\"}}]",
                             target_path, inspector_host, port, inspector_host, port
                         );
                         let _ = write_http_json_response(&mut stream, &body);
@@ -687,7 +687,7 @@ fn start_inspector_server(
 
                     if path == "/json/version" {
                         let body =
-                            "{\"Browser\":\"deno-edge-runtime\",\"Protocol-Version\":\"1.3\"}";
+                            "{\"Browser\":\"thunder\",\"Protocol-Version\":\"1.3\"}";
                         let _ = write_http_json_response(&mut stream, body);
                         continue;
                     }

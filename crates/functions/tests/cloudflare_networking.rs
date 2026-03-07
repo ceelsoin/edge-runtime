@@ -140,7 +140,7 @@ fn tcp_tls_socket_alternative() {
 
 // ── WebSockets ────────────────────────────────────────────────────
 
-// NOTE: WebSocket API is NOT available in current deno-edge-runtime
+// NOTE: WebSocket API is NOT available in current thunder
 // Reason: No WebSocket extension loaded in extensions.rs
 //
 // Available alternatives:

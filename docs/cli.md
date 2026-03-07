@@ -1,6 +1,6 @@
 # Deno Edge Runtime CLI
 
-This document describes the `edge-cli` crate command-line interface exposed by the `deno-edge-runtime` binary.
+This document describes the `edge-cli` crate command-line interface exposed by the `thunder` binary.
 
 Related docs:
 
@@ -9,7 +9,7 @@ Related docs:
 ## Binary
 
 - Crate: `crates/cli` (`edge-cli`)
-- Executable name: `deno-edge-runtime`
+- Executable name: `thunder`
 - Primary purpose: run, bundle, watch, test, and typecheck JavaScript/TypeScript edge functions.
 
 ## Quick Start
@@ -47,7 +47,7 @@ cargo run -- bundle --entrypoint ./examples/hello/hello.ts --output ./hello.eszi
 ## Global CLI Syntax
 
 ```bash
-deno-edge-runtime [GLOBAL_OPTIONS] <COMMAND> [COMMAND_OPTIONS]
+thunder [GLOBAL_OPTIONS] <COMMAND> [COMMAND_OPTIONS]
 ```
 
 ### Global Options
@@ -73,7 +73,7 @@ deno-edge-runtime [GLOBAL_OPTIONS] <COMMAND> [COMMAND_OPTIONS]
   - Env: `EDGE_RUNTIME_OTEL_ENDPOINT`
 - `--otel-service-name <NAME>`
   - OTEL resource `service.name`.
-  - Default: `deno-edge-runtime`
+  - Default: `thunder`
   - Env: `EDGE_RUNTIME_OTEL_SERVICE_NAME`
 - `--otel-export-interval-ms <MS>`
   - Periodic export interval for OTEL batch readers.
@@ -178,7 +178,7 @@ Starts the HTTP runtime server with a **dual-listener architecture**:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     deno-edge-runtime                           │
+│                     thunder                           │
 │                                                                 │
 │  ┌─────────────────────┐     ┌─────────────────────────────┐   │
 │  │   Admin Listener    │     │     Ingress Listener        │   │
@@ -203,7 +203,7 @@ Starts the HTTP runtime server with a **dual-listener architecture**:
 ### Usage
 
 ```bash
-deno-edge-runtime start [OPTIONS]
+thunder start [OPTIONS]
 ```
 
 ### Admin Listener Options
@@ -421,13 +421,13 @@ GET /my-function/api/users/123
 
 ```bash
 # Start with default ports (admin: 9000, ingress: 8080)
-deno-edge-runtime start
+thunder start
 ```
 
 **Production with authentication:**
 
 ```bash
-deno-edge-runtime start \
+thunder start \
   --api-key "$(cat /run/secrets/api-key)" \
   --port 8080 \
   --max-heap-mib 256
@@ -436,15 +436,15 @@ deno-edge-runtime start \
 **With Unix socket for ingress:**
 
 ```bash
-deno-edge-runtime start \
+thunder start \
   --api-key "super-secret" \
-  --unix-socket /var/run/edge-runtime.sock
+  --unix-socket /var/run/thunder.sock
 ```
 
 **With TLS on both listeners:**
 
 ```bash
-deno-edge-runtime start \
+thunder start \
   --api-key "secret" \
   --admin-tls-cert /certs/admin.crt \
   --admin-tls-key /certs/admin.key \
@@ -459,13 +459,13 @@ deno-edge-runtime start \
 export EDGE_RUNTIME_API_KEY="my-secret-key"
 export EDGE_RUNTIME_PORT=8080
 export EDGE_RUNTIME_ADMIN_PORT=9000
-deno-edge-runtime start
+thunder start
 ```
 
 **Production with security hardening:**
 
 ```bash
-deno-edge-runtime start \
+thunder start \
   --api-key "$(cat /run/secrets/api-key)" \
   --port 8080 \
   --max-heap-mib 256 \
@@ -478,7 +478,7 @@ deno-edge-runtime start \
 
 ```bash
 # Allow fetch() to access internal services on 10.x.x.x
-deno-edge-runtime start \
+thunder start \
   --api-key "secret" \
   --allow-private-net "10.0.0.0/8"
 ```
@@ -487,7 +487,7 @@ deno-edge-runtime start \
 
 ```bash
 # Only use in development! Allows fetch() to localhost, metadata endpoints, etc.
-deno-edge-runtime start \
+thunder start \
   --disable-ssrf-protection
 ```
 
@@ -545,7 +545,7 @@ Bundles a JS/TS entrypoint and dependencies into a serialized package (ESZIP pac
 ### Usage
 
 ```bash
-deno-edge-runtime bundle --entrypoint <FILE> --output <FILE>
+thunder bundle --entrypoint <FILE> --output <FILE>
 ```
 
 ### Options
@@ -568,7 +568,7 @@ deno-edge-runtime bundle --entrypoint <FILE> --output <FILE>
 ### Examples
 
 ```bash
-deno-edge-runtime bundle \
+thunder bundle \
   --entrypoint ./examples/json-api/json-api.ts \
   --output ./bundles/eszip/json-api.eszip
 ```
@@ -580,7 +580,7 @@ Watches a path for file changes, bundles discovered JS/TS files, and deploys/upd
 ### Usage
 
 ```bash
-deno-edge-runtime watch [OPTIONS]
+thunder watch [OPTIONS]
 ```
 
 ### Options
@@ -646,7 +646,7 @@ deno-edge-runtime watch [OPTIONS]
 ### Example
 
 ```bash
-deno-edge-runtime watch \
+thunder watch \
   --path ./examples \
   --port 9000 \
   --interval 500 \
@@ -660,7 +660,7 @@ Runs JS/TS runtime test files in an isolated runtime, with optional debugger ins
 ### Usage
 
 ```bash
-deno-edge-runtime test [OPTIONS]
+thunder test [OPTIONS]
 ```
 
 ### Options
@@ -703,7 +703,7 @@ deno-edge-runtime test [OPTIONS]
 Run all tests except helper library files:
 
 ```bash
-deno-edge-runtime test \
+thunder test \
   --path "./tests/js/**/*.ts" \
   --ignore "./tests/js/lib/**"
 ```
@@ -711,7 +711,7 @@ deno-edge-runtime test \
 Debug a single test file:
 
 ```bash
-deno-edge-runtime test --path ./tests/js/my_test.ts --inspect 9229
+thunder test --path ./tests/js/my_test.ts --inspect 9229
 ```
 
 ## `check`
@@ -721,7 +721,7 @@ Typechecks source files with `deno check`, or falls back to syntax/module valida
 ### Usage
 
 ```bash
-deno-edge-runtime check [OPTIONS]
+thunder check [OPTIONS]
 ```
 
 ### Options
@@ -746,11 +746,11 @@ deno-edge-runtime check [OPTIONS]
 ### Examples
 
 ```bash
-deno-edge-runtime check --path ./examples
+thunder check --path ./examples
 ```
 
 ```bash
-deno-edge-runtime check \
+thunder check \
   --path "./**/*.{ts,tsx}" \
   --ignore "./target/**" \
   --ignore "./node_modules/**"

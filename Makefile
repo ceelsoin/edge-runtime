@@ -14,4 +14,6 @@ test:
 	cargo run -- test --path "./tests/js/**/*.ts" --ignore "./tests/js/lib/**" 2>&1
 release:
 	cargo build --release 2>&1
-	cp target/release/deno-edge-runtime ./edge-runtime
+	cp target/release/thunder ./thunder
+install: release
+	cp target/release/thunder /usr/local/bin/thunder

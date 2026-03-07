@@ -246,7 +246,7 @@ pub fn inject_request_bridge(js_runtime: &mut JsRuntime) -> Result<(), Error> {
                     const target = this._requestTarget(input);
                     const message = String(error?.message || error || 'unknown error');
                     this._lastBlockedNetworkLog = { target, message };
-                    console.warn(`[edge-runtime] blocked outbound request target='${target}' reason='${message}'`);
+                    console.warn(`[thunder] blocked outbound request target='${target}' reason='${message}'`);
                 },
             };
 

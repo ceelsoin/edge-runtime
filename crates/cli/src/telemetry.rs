@@ -56,7 +56,7 @@ pub struct TelemetryArgs {
     /// OTEL service.name resource attribute.
     #[arg(
         long,
-        default_value = "deno-edge-runtime",
+        default_value = "thunder",
         global = true,
         env = "EDGE_RUNTIME_OTEL_SERVICE_NAME"
     )]
@@ -206,7 +206,7 @@ pub fn init(
             .with_resource(resource.clone())
             .build();
 
-        let tracer = provider.tracer("deno-edge-runtime");
+        let tracer = provider.tracer("thunder");
         global::set_tracer_provider(provider.clone());
         tracer_provider = Some(provider);
 
@@ -256,7 +256,7 @@ pub fn init(
             .build();
         global::set_meter_provider(provider.clone());
 
-        let meter = provider.meter("deno-edge-runtime");
+        let meter = provider.meter("thunder");
         isolate_metric_instruments = Some((
             meter
                 .u64_counter("edge_runtime_isolate_logs_exported_total")
@@ -305,7 +305,7 @@ pub fn init(
                 })
             }
             (Some(logger_provider), None) => {
-                let meter = global::meter("deno-edge-runtime");
+                let meter = global::meter("thunder");
                 Some(IsolateLogOtelBridge {
                     logger_provider,
                     exported_counter: meter
@@ -452,7 +452,7 @@ fn emit_isolate_log(
     logger_provider: &LoggerProvider,
     entry: &IsolateConsoleLog,
 ) -> Result<(), anyhow::Error> {
-    let logger = logger_provider.logger("edge-runtime-isolate");
+    let logger = logger_provider.logger("thunder-isolate");
     let mut record = logger.create_log_record();
 
     let (severity_number, severity_text) = match entry.level {

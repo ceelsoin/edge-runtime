@@ -10,8 +10,8 @@ use serde_json::Value;
 
 use crate::ssrf::DEFAULT_DENY_RANGES;
 
-const COMMON_SCHEMA_URI: &str = "https://edge-runtime.dev/schemas/base/common.schema.json";
-const NETWORK_SCHEMA_URI: &str = "https://edge-runtime.dev/schemas/base/network.schema.json";
+const COMMON_SCHEMA_URI: &str = "https://thunder.dev/schemas/base/common.schema.json";
+const NETWORK_SCHEMA_URI: &str = "https://thunder.dev/schemas/base/network.schema.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -425,7 +425,7 @@ mod tests {
     #[test]
     fn validates_minimal_manifest() {
         let json = r#"{
-                    "$schema": "https://edge-runtime.dev/schemas/function-manifest.v1.schema.json",
+                    "$schema": "https://thunder.dev/schemas/function-manifest.v1.schema.json",
                     "manifestVersion": 1,
                     "name": "hello",
                     "entrypoint": "./index.ts",

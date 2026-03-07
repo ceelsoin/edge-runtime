@@ -17,7 +17,7 @@ await runSuite("crypto-and-timers", [
   {
     name: "subtle.digest sha-256",
     run: async () => {
-      const data = new TextEncoder().encode("edge-runtime");
+      const data = new TextEncoder().encode("thunder");
       const digest = await crypto.subtle.digest("SHA-256", data);
       assertEquals(digest.byteLength, 32);
     },

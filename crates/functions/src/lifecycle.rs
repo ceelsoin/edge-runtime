@@ -817,7 +817,7 @@ fn start_inspector_server(
 
                     if path == "/json" || path == "/json/list" {
                         let body = format!(
-                            "[{{\"description\":\"deno-edge-runtime\",\"id\":\"{id}\",\"title\":\"{title}\",\"type\":\"node\",\"url\":\"{url}\",\"webSocketDebuggerUrl\":\"ws://{host}:{port}/{id}\",\"devtoolsFrontendUrl\":\"devtools://devtools/bundled/inspector.html?ws={host}:{port}/{id}\"}}]",
+                            "[{{\"description\":\"thunder\",\"id\":\"{id}\",\"title\":\"{title}\",\"type\":\"node\",\"url\":\"{url}\",\"webSocketDebuggerUrl\":\"ws://{host}:{port}/{id}\",\"devtoolsFrontendUrl\":\"devtools://devtools/bundled/inspector.html?ws={host}:{port}/{id}\"}}]",
                             id = target_id,
                             title = target_name,
                             url = root_url,

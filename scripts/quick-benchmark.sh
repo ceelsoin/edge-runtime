@@ -44,24 +44,24 @@ print_header "⚡ QUICK BENCHMARK RUNNER"
 echo ""
 
 # Check if binaries exist
-if [ ! -f "$PROJECT_ROOT/target/release/deno-edge-runtime" ]; then
+if [ ! -f "$PROJECT_ROOT/target/release/thunder" ]; then
     print_error "Binary not found. Please run: cargo build --release"
     exit 1
 fi
 
 # Start server
 print_section "Starting server..."
-pkill -f "deno-edge-runtime.*start" 2>/dev/null || true
+pkill -f "thunder.*start" 2>/dev/null || true
 sleep 1
 
-"$PROJECT_ROOT/target/release/deno-edge-runtime" start --host 0.0.0.0 --port 9000 > /tmp/edge-runtime.log 2>&1 &
+"$PROJECT_ROOT/target/release/thunder" start --host 0.0.0.0 --port 9000 > /tmp/thunder.log 2>&1 &
 SERVER_PID=$!
 
 sleep 3
 
 if ! curl -s -f "http://localhost:9000/_internal/metrics" > /dev/null 2>&1; then
     print_error "Server failed to start"
-    cat /tmp/edge-runtime.log
+    cat /tmp/thunder.log
     kill $SERVER_PID 2>/dev/null || true
     exit 1
 fi

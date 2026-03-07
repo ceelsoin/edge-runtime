@@ -50,20 +50,20 @@ jobs:
         include:
           - os: ubuntu-latest
             label: linux-x86_64
-            binary_name: deno-edge-runtime
-            archive_name: deno-edge-runtime-linux-x86_64.tar.gz
+            binary_name: thunder
+            archive_name: thunder-linux-x86_64.tar.gz
           - os: macos-latest
             label: macos-x86_64
-            binary_name: deno-edge-runtime
-            archive_name: deno-edge-runtime-macos-x86_64.tar.gz
+            binary_name: thunder
+            archive_name: thunder-macos-x86_64.tar.gz
           - os: macos-14
             label: macos-aarch64
-            binary_name: deno-edge-runtime
-            archive_name: deno-edge-runtime-macos-aarch64.tar.gz
+            binary_name: thunder
+            archive_name: thunder-macos-aarch64.tar.gz
           # - os: windows-latest
           #   label: windows-x86_64
-          #   binary_name: deno-edge-runtime.exe
-          #   archive_name: deno-edge-runtime-windows-x86_64.zip
+          #   binary_name: thunder.exe
+          #   archive_name: thunder-windows-x86_64.zip
 
     permissions:
       contents: read

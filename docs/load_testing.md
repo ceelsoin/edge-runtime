@@ -125,7 +125,7 @@ For custom scenarios:
 
 ```bash
 # Start server
-./target/debug/deno-edge-runtime start --host 0.0.0.0 --port 9000 &
+./target/debug/thunder start --host 0.0.0.0 --port 9000 &
 
 # In another terminal, deploy a function
 curl -X POST http://localhost:9000/_internal/functions \
@@ -136,7 +136,7 @@ curl -X POST http://localhost:9000/_internal/functions \
 k6 run scripts/load-test.js
 
 # Stop server
-pkill -f "deno-edge-runtime start"
+pkill -f "thunder start"
 ```
 
 ## Understanding Results
@@ -280,7 +280,7 @@ done
 Adjust server-side limits:
 
 ```bash
-./target/debug/deno-edge-runtime start \
+./target/debug/thunder start \
   --max-heap-mib 256 \              # Increase if out of memory
   --cpu-time-limit-ms 100000 \      # CPU timeout per request
   --wall-clock-timeout-ms 120000    # Total timeout per request
@@ -326,7 +326,7 @@ Adjust server-side limits:
 - Uncaught exceptions
 
 **Solutions**:
-- Check server logs: `tail -f /tmp/edge-runtime.log`
+- Check server logs: `tail -f /tmp/thunder.log`
 - Increase timeouts if operations are legitimately slow
 - Add error handling in functions
 
@@ -344,11 +344,11 @@ Adjust server-side limits:
 curl http://localhost:9000/hello
 
 # Check processes
-ps aux | grep "deno-edge-runtime"
+ps aux | grep "thunder"
 
 # Kill and restart if stuck
-pkill -f "deno-edge-runtime"
-./target/debug/deno-edge-runtime start
+pkill -f "thunder"
+./target/debug/thunder start
 ```
 
 ## Advanced Configuration

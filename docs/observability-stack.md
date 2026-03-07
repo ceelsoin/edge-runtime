@@ -1,6 +1,6 @@
 # Observability Stack (OTEL + Loki + Tempo + Prometheus + Grafana)
 
-This stack lets you validate end-to-end telemetry from `deno-edge-runtime`:
+This stack lets you validate end-to-end telemetry from `thunder`:
 
 - Traces -> OpenTelemetry Collector -> Tempo
 - Metrics -> OpenTelemetry Collector -> vmagent -> VictoriaMetrics
@@ -17,7 +17,7 @@ This stack lets you validate end-to-end telemetry from `deno-edge-runtime`:
 - Prometheus config: `observability/prometheus/prometheus.yml`
 - Grafana datasources provisioning: `observability/grafana/provisioning/datasources/datasources.yml`
 - Grafana dashboard provisioning: `observability/grafana/provisioning/dashboards/dashboards.yml`
-- Grafana initial dashboard: `observability/grafana/provisioning/dashboards/files/edge-runtime-overview.json`
+- Grafana initial dashboard: `observability/grafana/provisioning/dashboards/files/thunder-overview.json`
 
 ## 1. Start the Stack
 
@@ -41,7 +41,7 @@ Run the runtime with OTEL export enabled and isolate collector export active:
 cargo run -- \
   --otel-enabled \
   --otel-endpoint http://127.0.0.1:4318 \
-  --otel-service-name deno-edge-runtime-local \
+  --otel-service-name thunder-local \
   --otel-enable-traces true \
   --otel-enable-metrics true \
   --otel-enable-logs true \
@@ -85,8 +85,8 @@ Provisioned dashboard:
 
 Quick checks:
 
-- Explore -> Tempo: search traces by service `deno-edge-runtime-local`
-- Explore -> Loki: query `{service_name="deno-edge-runtime-local"}` or `{log_source="isolate"}`
+- Explore -> Tempo: search traces by service `thunder-local`
+- Explore -> Loki: query `{service_name="thunder-local"}` or `{log_source="isolate"}`
 - Explore -> VictoriaMetrics: query `edge_runtime_isolate_logs_exported_total`
 
 ## 5. Validate Collector and Backends Directly

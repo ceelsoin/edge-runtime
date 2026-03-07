@@ -71,7 +71,7 @@ async fn assert_js_true_async(js: &str, desc: &str) {
 
 // ── Cache API ──────────────────────────────────────────────────────
 
-// NOTE: Cloudflare Cache API (caches.default) is NOT available in deno-edge-runtime
+// NOTE: Cloudflare Cache API (caches.default) is NOT available in thunder
 // Reason: No native Cache API extension loaded
 //
 // The Cache API in Cloudflare provides:
@@ -217,7 +217,7 @@ fn cache_pattern_conditional() {
 // ── HTMLRewriter API ────────────────────────────────────────────────
 
 // NOTE: HTMLRewriter is a Cloudflare-specific API for HTML transformation
-// It is NOT available in deno-edge-runtime
+// It is NOT available in thunder
 //
 // HTMLRewriter provides:
 // 1. HTML parsing and transformation

@@ -204,7 +204,7 @@ fn encoding_deflate_compression() {
 
 // ── Node.js Buffer Compatibility ────────────────────────────────────
 
-// NOTE: Node.js Buffer is NOT available in current deno-edge-runtime
+// NOTE: Node.js Buffer is NOT available in current thunder
 // Reason: deno_node extension is not loaded
 //
 // Alternative: Use Uint8Array and related Web APIs instead of Buffer

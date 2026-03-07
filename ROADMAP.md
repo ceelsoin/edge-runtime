@@ -645,7 +645,7 @@ Notas de cobertura:
     - [ ] `Partial`: implementação parcial com limitações documentadas
     - [ ] `Stub`: importável, mas métodos `noop` ou erro determinístico
 - [ ] Padronizar erro de stub para métodos não implementados:
-    - [ ] Formato recomendado: `[edge-runtime] <api> is not implemented in this runtime profile`
+    - [ ] Formato recomendado: `[thunder] <api> is not implemented in this runtime profile`
 - [ ] Garantir que módulos `Stub` não quebrem no import (quebra apenas na chamada do método)
 - [ ] Publicar tabela no docs com status por módulo `node:*`
 
