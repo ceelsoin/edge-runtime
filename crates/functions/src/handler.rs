@@ -141,6 +141,14 @@ pub fn inject_request_bridge_with_proxy_and_config(
     );
     js_runtime.execute_script("edge-internal:///runtime_dns_config.js", set_dns_config)?;
 
+    let set_zlib_config = format!(
+        "globalThis.__edgeRuntimeZlibConfig = {{ maxOutputLength: {}, maxInputLength: {}, operationTimeoutMs: {} }};",
+        isolate_config.zlib_max_output_length,
+        isolate_config.zlib_max_input_length,
+        isolate_config.zlib_operation_timeout_ms,
+    );
+    js_runtime.execute_script("edge-internal:///runtime_zlib_config.js", set_zlib_config)?;
+
     js_runtime.execute_script(
         "edge-internal:///runtime_bridge.js",
         deno_core::ascii_str!(

@@ -197,7 +197,7 @@ Unsupported privileged behavior fails with deterministic errors (for example `EO
 | `node:dgram` | 🟡 Partial (stub/non-functional) | Stub/Partial | Partial | UDP/datagram import compatibility with deterministic non-functional sockets. |
 | `node:v8` | 🟡 Partial (stub/non-functional) | Stub/Partial | Partial | V8 compatibility introspection helpers with deterministic static values. |
 | `node:vm` | 🟡 Partial (stub/non-functional) | Stub/Partial | Partial | VM import compatibility with deterministic non-functional script execution APIs. |
-| `node:zlib` | 🟢 Supported (practical subset) | Partial | Partial | Functional async compression subset (`gzip/gunzip/deflate/inflate/deflateRaw/inflateRaw`) via Web Compression Streams; sync/stream constructors remain deterministic stubs. |
+| `node:zlib` | 🟢 Supported (practical subset) | Partial | Partial | Functional async+sync one-shot compression subset (`gzip/gunzip/deflate/inflate/deflateRaw/inflateRaw`) backed by native runtime ops with runtime-configurable defaults under immutable hard output/input ceilings and operation-time guardrail; stream constructors remain deterministic stubs. |
 | `node:assert` | 🟢 Supported (practical subset) | Partial | Partial | Assertion testing helpers compatible with common assert usage patterns. |
 | `node:url` | 🟢 Supported (practical subset) | Partial | Partial | URL module compatibility with URL constructors, file URL helpers, and domain ASCII/Unicode helpers. |
 | `node:timers` | 🟢 Supported (practical subset) | Partial | Partial | Timer module compatibility backed by runtime timer globals. |

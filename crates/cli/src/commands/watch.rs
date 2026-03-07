@@ -101,6 +101,30 @@ pub struct WatchArgs {
     )]
     dns_timeout_ms: u64,
 
+    /// Default node:zlib max output length in bytes (hard-ceiling enforced by runtime).
+    #[arg(
+        long,
+        default_value_t = 16 * 1024 * 1024,
+        env = "EDGE_RUNTIME_ZLIB_MAX_OUTPUT_LENGTH"
+    )]
+    zlib_max_output_length: usize,
+
+    /// Default node:zlib max input length in bytes (hard-ceiling enforced by runtime).
+    #[arg(
+        long,
+        default_value_t = 8 * 1024 * 1024,
+        env = "EDGE_RUNTIME_ZLIB_MAX_INPUT_LENGTH"
+    )]
+    zlib_max_input_length: usize,
+
+    /// Default node:zlib operation timeout in milliseconds.
+    #[arg(
+        long,
+        default_value_t = 250,
+        env = "EDGE_RUNTIME_ZLIB_OPERATION_TIMEOUT_MS"
+    )]
+    zlib_operation_timeout_ms: u64,
+
     /// Outgoing HTTP proxy URL (eg. http://proxy.local:8080, socks5://proxy.local:1080)
     #[arg(long, env = "EDGE_RUNTIME_HTTP_OUTGOING_PROXY")]
     http_outgoing_proxy: Option<String>,
@@ -421,6 +445,9 @@ async fn load_and_deploy_functions(
             dns_doh_endpoint: default_config.dns_doh_endpoint.clone(),
             dns_max_answers: default_config.dns_max_answers,
             dns_timeout_ms: default_config.dns_timeout_ms,
+            zlib_max_output_length: default_config.zlib_max_output_length,
+            zlib_max_input_length: default_config.zlib_max_input_length,
+            zlib_operation_timeout_ms: default_config.zlib_operation_timeout_ms,
         };
 
         match bundle_file(file_path).await {
@@ -594,6 +621,9 @@ fn build_watch_default_config(args: &WatchArgs) -> IsolateConfig {
         dns_doh_endpoint: args.dns_doh_endpoint.clone(),
         dns_max_answers: args.dns_max_answers,
         dns_timeout_ms: args.dns_timeout_ms,
+        zlib_max_output_length: args.zlib_max_output_length,
+        zlib_max_input_length: args.zlib_max_input_length,
+        zlib_operation_timeout_ms: args.zlib_operation_timeout_ms,
     }
 }
 
@@ -636,6 +666,9 @@ mod tests {
             dns_doh_endpoint: "https://1.1.1.1/dns-query".to_string(),
             dns_max_answers: 16,
             dns_timeout_ms: 2000,
+            zlib_max_output_length: 16 * 1024 * 1024,
+            zlib_max_input_length: 8 * 1024 * 1024,
+            zlib_operation_timeout_ms: 250,
             http_outgoing_proxy: None,
             https_outgoing_proxy: None,
             tcp_outgoing_proxy: None,

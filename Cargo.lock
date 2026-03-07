@@ -5023,6 +5023,7 @@ dependencies = [
  "deno_web",
  "deno_webidl",
  "eszip",
+ "flate2",
  "futures-util",
  "http",
  "ipnet",

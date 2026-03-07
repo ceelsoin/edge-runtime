@@ -88,6 +88,18 @@ pub struct IsolateConfig {
     /// Timeout for DNS resolver requests in milliseconds.
     #[serde(default = "default_dns_timeout_ms")]
     pub dns_timeout_ms: u64,
+
+    /// Default max output length for node:zlib one-shot operations.
+    #[serde(default = "default_zlib_max_output_length")]
+    pub zlib_max_output_length: usize,
+
+    /// Default max input length for node:zlib one-shot operations.
+    #[serde(default = "default_zlib_max_input_length")]
+    pub zlib_max_input_length: usize,
+
+    /// Default operation timeout in milliseconds for node:zlib one-shot operations.
+    #[serde(default = "default_zlib_operation_timeout_ms")]
+    pub zlib_operation_timeout_ms: u64,
 }
 
 fn default_max_heap() -> usize {
@@ -130,6 +142,18 @@ fn default_dns_timeout_ms() -> u64 {
     2000
 }
 
+fn default_zlib_max_output_length() -> usize {
+    16 * 1024 * 1024
+}
+
+fn default_zlib_max_input_length() -> usize {
+    8 * 1024 * 1024
+}
+
+fn default_zlib_operation_timeout_ms() -> u64 {
+    250
+}
+
 impl Default for IsolateConfig {
     fn default() -> Self {
         Self {
@@ -147,6 +171,9 @@ impl Default for IsolateConfig {
             dns_doh_endpoint: default_dns_doh_endpoint(),
             dns_max_answers: default_dns_max_answers(),
             dns_timeout_ms: default_dns_timeout_ms(),
+            zlib_max_output_length: default_zlib_max_output_length(),
+            zlib_max_input_length: default_zlib_max_input_length(),
+            zlib_operation_timeout_ms: default_zlib_operation_timeout_ms(),
         }
     }
 }

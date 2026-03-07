@@ -3,7 +3,7 @@
 > Baseado na auditoria de segurança e arquitetura realizada em 05/03/2026.
 > Cada item referencia o finding correspondente no `AUDIT.md`.
 >
-> Última atualização: 07/03/2026 (P1 de VFS seguro em `node:fs` concluído com quotas configuráveis por manifest/flag/env, `http/https` client-side compat, P2 de `node:dns` via DoH controlado, expansão de `node:util`/`node:diagnostics_channel`, `async_hooks`/ALS com propagação real e P3 de `node:zlib` funcional parcial).
+> Última atualização: 07/03/2026 (P1 de VFS seguro em `node:fs` concluído com quotas configuráveis por manifest/flag/env, `http/https` client-side compat, P2 de `node:dns` via DoH controlado, expansão de `node:util`/`node:diagnostics_channel`, `async_hooks`/ALS com propagação real e P3 de `node:zlib` funcional parcial com backend nativo, limites configuráveis de runtime sob caps rígidos e guardrail de tempo).
 > Commits de referência: `92aa473`, `6607a2b`, `4933dda`.
 > Inclui também mudanças locais ainda não commitadas em `functions/runtime-core`.
 
@@ -536,7 +536,7 @@ Notas de cobertura:
 - [x] Expor `globalThis.process` (subset seguro e estável)
 - [x] Expor `globalThis.Buffer` compatível (`node:buffer`)
 - [x] Expor `setImmediate`/`clearImmediate`
-- [ ] Implementar suporte inicial aos módulos:
+- [x] Implementar suporte inicial aos módulos:
     - [x] `node:buffer`
     - [x] `node:events`
     - [x] `node:util`
@@ -581,8 +581,8 @@ Notas de cobertura:
 
 **Objetivo:** suportar isolamento de contexto assíncrono por request (essencial em stacks Next modernas).
 
-- [ ] Implementar camada compatível com `AsyncLocalStorage` (ou equivalente funcional)
-- [ ] Garantir propagação de contexto por awaits/promises/timers
+- [x] Implementar camada compatível com `AsyncLocalStorage` (ou equivalente funcional)
+- [x] Garantir propagação de contexto por awaits/promises/timers
 - [ ] Isolar contexto entre requests concorrentes
 - [ ] Adicionar testes de concorrência validando não-vazamento de contexto
 
@@ -684,27 +684,29 @@ Notas de cobertura:
 
 **Objetivo:** transformar compatibilidade em backlog executável por sprint.
 
-- [ ] Etapa A (base de execução):
-    - [ ] `node:buffer`
-    - [ ] `node:process`
-    - [ ] `node:events`
-    - [ ] `node:util`
-    - [ ] `node:path`
-- [ ] Etapa B (SSR/RSC):
-    - [ ] `node:stream`
-    - [ ] `node:string_decoder`
-    - [ ] `node:module` (parcial)
-    - [ ] `node:os` (partial/stub)
-- [ ] Etapa C (rede e protocolos):
-    - [ ] `node:http` (parcial)
-    - [ ] `node:https` (parcial)
-    - [ ] `node:net` (parcial)
-    - [ ] `node:tls` (stub/partial)
-- [ ] Etapa D (baixo encaixe serverless):
-    - [ ] `node:child_process` (stub)
-    - [ ] `node:cluster` (stub)
-    - [ ] `node:repl` (stub)
-    - [ ] `node:dgram` (stub)
+- [x] Etapa A (base de execução):
+    - [x] `node:buffer`
+    - [x] `node:process`
+    - [x] `node:events`
+    - [x] `node:util`
+    - [x] `node:path`
+- [x] Etapa B (SSR/RSC):
+    - [x] `node:stream`
+    - [x] `node:string_decoder`
+    - [x] `node:module` (parcial)
+    - [x] `node:os` (partial/stub)
+- [x] Etapa C (rede e protocolos):
+    - [x] `node:http` (parcial)
+    - [x] `node:https` (parcial)
+    - [x] `node:net` (parcial)
+    - [x] `node:tls` (stub/partial)
+- [x] Etapa D (baixo encaixe serverless):
+    - [x] `node:child_process` (stub)
+    - [x] `node:cluster` (stub)
+    - [x] `node:repl` (stub)
+    - [x] `node:dgram` (stub)
+
+Status aplicado desta trilha: etapas A/B/C/D concluídas em perfil `Full/Partial/Stub` com cobertura em `node_module_imports` e classificação no relatório `web_api_report`.
 
 **Critério de aceite:** cada etapa possui suíte de regressão e status atualizado em matriz `Full/Partial/Stub/None`.
 
@@ -738,58 +740,58 @@ Notas de cobertura:
 
 1. `node:process`
 - **Cloudflare:** `process.env` pode ser populado por bindings/flags, `stdout/stderr/stdin` como streams, `cwd` inicial `/bundle`, `chdir` suportado com FS virtual.
-- **Runtime atual:** `env` apenas em memória local (não populado por bindings), `stdout/stderr/stdin` ausentes, `cwd` fixo `/`, `chdir` bloqueado por sandbox.
-- **Status:** divergência funcional relevante.
+- **Runtime atual:** subset compatível com `env` em memória, `stdout/stderr/stdin` compatíveis, `cwd` virtual `/bundle` e `chdir` controlado por VFS seguro.
+- **Status:** gap reduzido; divergências remanescentes em integração com bindings/plataforma.
 
 2. `node:http` e `node:https`
 - **Cloudflare:** `request/get` funcionais como wrapper de `fetch` (com restrições); suporte adicional a server-side APIs via `cloudflare:node` + flags.
-- **Runtime atual:** `request/get` bloqueados por política (`ERR_USE_FETCH`), `createServer` não implementado.
-- **Status:** divergência funcional intencional (segurança), precisa de modo de compat opcional para paridade.
+- **Runtime atual:** `request/get` funcionais via wrapper de `fetch`; APIs server-side (`createServer`) seguem não funcionais por sandbox.
+- **Status:** gap reduzido; divergência principal permanece no lado server-side.
 
 3. `node:fs` e `node:fs/promises`
 - **Cloudflare:** VFS com `/bundle` (read-only), `/tmp` (ephemeral por request), `/dev/*`; ampla API com limitações documentadas.
-- **Runtime atual:** stub seguro (`EOPNOTSUPP`) sem VFS.
-- **Status:** grande gap de paridade.
+- **Runtime atual:** VFS seguro com `/bundle` read-only, `/tmp` efêmero e `/dev/null`, com quotas configuráveis por manifest/CLI/env.
+- **Status:** gap reduzido; cobertura de APIs ainda parcial por design de sandbox.
 
 4. `node:dns`
 - **Cloudflare:** maioria da API disponível via DoH/1.1.1.1; apenas alguns métodos não implementados (`lookup`, `lookupService`, `resolve`).
-- **Runtime atual:** módulo majoritariamente stub/non-functional.
-- **Status:** gap alto.
+- **Runtime atual:** subset funcional via DoH (`lookup`, `resolve*`, `reverse` e `dns.promises` equivalentes), com limites/timeout configuráveis; restante em stub determinístico.
+- **Status:** gap reduzido para médio.
 
 5. `node:net`
 - **Cloudflare:** `net.Socket`/`connect` suportados para outbound TCP; `net.Server` não suportado.
-- **Runtime atual:** `connect` não implementado; existe `createServer` stub.
-- **Status:** gap alto e desalinhamento de superfície.
+- **Runtime atual:** outbound `connect/createConnection` disponível; `net.Server` permanece stub.
+- **Status:** alinhado no essencial de outbound, com gap residual em superfície avançada.
 
 6. `node:tls`
 - **Cloudflare:** `connect`, `TLSSocket`, `checkServerIdentity`, `createSecureContext` disponíveis; server-side TLS Node não suportado.
-- **Runtime atual:** `connect/createSecureContext` stubs não funcionais.
-- **Status:** gap alto.
+- **Runtime atual:** `connect` disponível para subset cliente outbound; APIs de contexto/servidor permanecem stub determinístico.
+- **Status:** gap reduzido para médio.
 
 7. `node:url`
 - **Cloudflare:** `domainToASCII`/`domainToUnicode` e demais APIs de URL documentadas.
-- **Runtime atual:** check de compat está `None` no relatório para `node:url`.
-- **Status:** gap funcional imediato (alta prioridade).
+- **Runtime atual:** suporte funcional em subset com `domainToASCII`/`domainToUnicode` e helpers de file URL.
+- **Status:** item priorizado concluído, gap reduzido.
 
 8. `node:util`
 - **Cloudflare:** `promisify/callbackify`, `util.types` (com subset explícito), `MIMEType`.
-- **Runtime atual:** subset básico (`format`, `inspect`, `promisify`, `types`), sem confirmação de `MIMEType`.
+- **Runtime atual:** subset prático com `format`, `inspect`, `promisify`, `types`, `MIMEType` e `MIMEParams`.
 - **Status:** gap médio.
 
 9. `node:diagnostics_channel`
 - **Cloudflare:** inclui `TracingChannel` e integração com Tail Workers.
-- **Runtime atual:** pub/sub básico.
-- **Status:** gap médio.
+- **Runtime atual:** pub/sub com `TracingChannel`/`tracingChannel` e hooks de trace (`start/end/asyncStart/asyncEnd/error`).
+- **Status:** gap reduzido; diferenças remanescentes em integração de plataforma.
 
 10. `node:async_hooks` / `AsyncLocalStorage`
 - **Cloudflare:** ALS funcional com caveats documentados, `AsyncResource` parcial.
-- **Runtime atual:** classificação stub/parcial.
-- **Status:** gap alto para frameworks modernos.
+- **Runtime atual:** ALS funcional com propagação em `Promise`/microtask e hooks básicos (`createHook`, async IDs, `AsyncResource` subset).
+- **Status:** gap reduzido para médio.
 
 11. `node:zlib`
 - **Cloudflare:** módulo funcional (gzip/deflate/brotli).
-- **Runtime atual:** stub/non-functional.
-- **Status:** gap médio/alto.
+- **Runtime atual:** subset funcional one-shot async+sync (`gzip/gunzip/deflate/inflate/deflateRaw/inflateRaw`) com backend nativo, limites configuráveis e hard ceilings.
+- **Status:** gap reduzido; brotli e stream constructors permanecem pendentes.
 
 12. `node:events` e `node:buffer`
 - **Cloudflare:** suporte amplo (com diferenças específicas documentadas).
@@ -822,7 +824,7 @@ Notas de cobertura:
     - Status aplicado: `createHook` funcional (subset) com `enable/disable` e eventos (`init`, `before`, `after`, `destroy`) em recursos instrumentados.
     - Status aplicado: `executionAsyncId`/`triggerAsyncId` e `AsyncResource.runInAsyncScope` com IDs estáveis no escopo compat.
 - [x] **P3:** substituir `zlib` stub por implementação funcional (ou bridge para APIs nativas de compressão).
-    - Status aplicado: subset funcional assíncrono em `node:zlib` (`gzip/gunzip/deflate/inflate/deflateRaw/inflateRaw`) sobre `CompressionStream`/`DecompressionStream`.
+    - Status aplicado: subset funcional one-shot assíncrono e síncrono em `node:zlib` (`gzip/gunzip/deflate/inflate/deflateRaw/inflateRaw` e `*Sync`) com bridge para op nativa (`op_edge_zlib_transform`), defaults configuráveis por runtime (`IsolateConfig`/CLI) e caps rígidos imutáveis de input/output, além de guardrail de tempo por operação.
     - Status aplicado: APIs sync e construtores de stream não suportados permanecem em stub determinístico (`ERR_NOT_IMPLEMENTED`) para manter previsibilidade no sandbox.
 
 **Critério de aceite desta trilha:**

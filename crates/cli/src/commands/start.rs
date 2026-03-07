@@ -231,6 +231,30 @@ pub struct StartArgs {
     )]
     dns_timeout_ms: u64,
 
+    /// Default node:zlib max output length in bytes (hard-ceiling enforced by runtime).
+    #[arg(
+        long,
+        default_value_t = 16 * 1024 * 1024,
+        env = "EDGE_RUNTIME_ZLIB_MAX_OUTPUT_LENGTH"
+    )]
+    zlib_max_output_length: usize,
+
+    /// Default node:zlib max input length in bytes (hard-ceiling enforced by runtime).
+    #[arg(
+        long,
+        default_value_t = 8 * 1024 * 1024,
+        env = "EDGE_RUNTIME_ZLIB_MAX_INPUT_LENGTH"
+    )]
+    zlib_max_input_length: usize,
+
+    /// Default node:zlib operation timeout in milliseconds.
+    #[arg(
+        long,
+        default_value_t = 250,
+        env = "EDGE_RUNTIME_ZLIB_OPERATION_TIMEOUT_MS"
+    )]
+    zlib_operation_timeout_ms: u64,
+
     /// Source map handling for modules loaded from eszip
     #[arg(
         long,
@@ -297,6 +321,9 @@ pub fn run(args: StartArgs) -> Result<(), anyhow::Error> {
             dns_doh_endpoint: args.dns_doh_endpoint,
             dns_max_answers: args.dns_max_answers,
             dns_timeout_ms: args.dns_timeout_ms,
+            zlib_max_output_length: args.zlib_max_output_length,
+            zlib_max_input_length: args.zlib_max_input_length,
+            zlib_operation_timeout_ms: args.zlib_operation_timeout_ms,
         };
 
         let pool_config = PoolRuntimeConfig {

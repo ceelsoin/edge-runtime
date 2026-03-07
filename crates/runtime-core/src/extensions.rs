@@ -1,11 +1,16 @@
 use std::borrow::Cow;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use deno_ast::{EmitOptions, MediaType, ParseParams, TranspileModuleOptions, TranspileOptions};
 use deno_core::url::Url;
 use deno_core::{op2, Extension, ModuleCodeString, ModuleName, OpState, RuntimeOptions, SourceMapData};
+use flate2::read::{DeflateDecoder, GzDecoder, ZlibDecoder};
+use flate2::write::{DeflateEncoder, GzEncoder, ZlibEncoder};
+use flate2::Compression;
 use node_resolver::errors::{
     PackageFolderResolveError, PackageFolderResolveErrorKind, PackageNotFoundError,
 };
@@ -28,6 +33,7 @@ deno_core::extension!(
 // Minimal Node built-ins for compatibility with SSR/tooling ecosystems.
 deno_core::extension!(
     edge_node_compat,
+    ops = [op_edge_zlib_transform],
     esm = [
         dir "src/node_compat",
         "node:process" = "process.ts",
@@ -69,6 +75,194 @@ deno_core::extension!(
         "node:fs/promises" = "fs_promises.ts",
     ],
 );
+
+const DEFAULT_ZLIB_MAX_OUTPUT_LENGTH: usize = 16 * 1024 * 1024;
+const ZLIB_HARD_MAX_OUTPUT_LENGTH: usize = 64 * 1024 * 1024;
+const ZLIB_HARD_MAX_INPUT_LENGTH: usize = 8 * 1024 * 1024;
+const DEFAULT_ZLIB_OPERATION_TIMEOUT_MS: u64 = 250;
+
+fn read_all_limited<R: Read>(
+    reader: &mut R,
+    max_output_length: usize,
+    operation_timeout: Duration,
+) -> Result<Vec<u8>, deno_error::JsErrorBox> {
+    let mut out = Vec::new();
+    let mut chunk = [0_u8; 8192];
+    let started = Instant::now();
+
+    loop {
+        if started.elapsed() > operation_timeout {
+            return Err(deno_error::JsErrorBox::generic("zlib operation timeout exceeded"));
+        }
+
+        let read = reader
+            .read(&mut chunk)
+            .map_err(|err| deno_error::JsErrorBox::generic(format!("zlib read failed: {err}")))?;
+        if read == 0 {
+            break;
+        }
+        out.extend_from_slice(&chunk[..read]);
+        if out.len() > max_output_length {
+            return Err(deno_error::JsErrorBox::generic(format!(
+                "zlib output exceeds maxOutputLength ({max_output_length} bytes)",
+            )));
+        }
+    }
+
+    Ok(out)
+}
+
+fn compress_with_limit(
+    format: &str,
+    input: &[u8],
+    max_output_length: usize,
+    operation_timeout: Duration,
+) -> Result<Vec<u8>, deno_error::JsErrorBox> {
+    let started = Instant::now();
+
+    let compressed = match format {
+        "gzip" => {
+            let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+            encoder
+                .write_all(input)
+                .map_err(|err| deno_error::JsErrorBox::generic(format!("gzip write failed: {err}")))?;
+            encoder
+                .finish()
+                .map_err(|err| deno_error::JsErrorBox::generic(format!("gzip finish failed: {err}")))?
+        }
+        "deflate" => {
+            let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+            encoder
+                .write_all(input)
+                .map_err(|err| deno_error::JsErrorBox::generic(format!("deflate write failed: {err}")))?;
+            encoder
+                .finish()
+                .map_err(|err| deno_error::JsErrorBox::generic(format!("deflate finish failed: {err}")))?
+        }
+        "deflate-raw" => {
+            let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
+            encoder
+                .write_all(input)
+                .map_err(|err| deno_error::JsErrorBox::generic(format!("deflateRaw write failed: {err}")))?;
+            encoder
+                .finish()
+                .map_err(|err| deno_error::JsErrorBox::generic(format!("deflateRaw finish failed: {err}")))?
+        }
+        _ => {
+            return Err(deno_error::JsErrorBox::generic(format!(
+                "unsupported zlib format: {format}",
+            )));
+        }
+    };
+
+    if started.elapsed() > operation_timeout {
+        return Err(deno_error::JsErrorBox::generic("zlib operation timeout exceeded"));
+    }
+
+    if compressed.len() > max_output_length {
+        return Err(deno_error::JsErrorBox::generic(format!(
+            "zlib output exceeds maxOutputLength ({max_output_length} bytes)",
+        )));
+    }
+
+    Ok(compressed)
+}
+
+fn decompress_with_limit(
+    format: &str,
+    input: &[u8],
+    max_output_length: usize,
+    operation_timeout: Duration,
+) -> Result<Vec<u8>, deno_error::JsErrorBox> {
+    match format {
+        "gzip" => {
+            let mut decoder = GzDecoder::new(input);
+            read_all_limited(&mut decoder, max_output_length, operation_timeout)
+        }
+        "deflate" => {
+            let mut decoder = ZlibDecoder::new(input);
+            read_all_limited(&mut decoder, max_output_length, operation_timeout)
+        }
+        "deflate-raw" => {
+            let mut decoder = DeflateDecoder::new(input);
+            read_all_limited(&mut decoder, max_output_length, operation_timeout)
+        }
+        _ => Err(deno_error::JsErrorBox::generic(format!(
+            "unsupported zlib format: {format}",
+        ))),
+    }
+}
+
+#[op2]
+#[buffer]
+fn op_edge_zlib_transform(
+    #[string] format: String,
+    #[string] mode: String,
+    #[buffer] input: &[u8],
+    max_output_length: Option<u32>,
+    operation_timeout_ms: Option<u32>,
+    max_input_length: Option<u32>,
+) -> Result<Vec<u8>, deno_error::JsErrorBox> {
+    let max_input_length = match max_input_length {
+        Some(value) => {
+            let as_usize = value as usize;
+            if as_usize == 0 {
+                return Err(deno_error::JsErrorBox::generic(
+                    "maxInputLength must be greater than zero",
+                ));
+            }
+            if as_usize > ZLIB_HARD_MAX_INPUT_LENGTH {
+                return Err(deno_error::JsErrorBox::generic(format!(
+                    "maxInputLength exceeds hard cap ({ZLIB_HARD_MAX_INPUT_LENGTH} bytes)",
+                )));
+            }
+            as_usize
+        }
+        None => ZLIB_HARD_MAX_INPUT_LENGTH,
+    };
+
+    if input.len() > max_input_length {
+        return Err(deno_error::JsErrorBox::generic(format!(
+            "zlib input exceeds maxInputLength ({max_input_length} bytes)",
+        )));
+    }
+
+    let max_output_length = match max_output_length {
+        Some(value) => {
+            let as_usize = value as usize;
+            if as_usize == 0 {
+                return Err(deno_error::JsErrorBox::generic(
+                    "maxOutputLength must be greater than zero",
+                ));
+            }
+            if as_usize > ZLIB_HARD_MAX_OUTPUT_LENGTH {
+                return Err(deno_error::JsErrorBox::generic(format!(
+                    "maxOutputLength exceeds hard cap ({ZLIB_HARD_MAX_OUTPUT_LENGTH} bytes)",
+                )));
+            }
+            as_usize
+        }
+        None => DEFAULT_ZLIB_MAX_OUTPUT_LENGTH,
+    };
+
+    let operation_timeout_ms = operation_timeout_ms
+        .map(|value| value as u64)
+        .unwrap_or(DEFAULT_ZLIB_OPERATION_TIMEOUT_MS);
+    if operation_timeout_ms == 0 {
+        return Err(deno_error::JsErrorBox::generic(
+            "operationTimeoutMs must be greater than zero",
+        ));
+    }
+    let operation_timeout = Duration::from_millis(operation_timeout_ms);
+
+    match mode.as_str() {
+        "compress" => compress_with_limit(&format, input, max_output_length, operation_timeout),
+        "decompress" => decompress_with_limit(&format, input, max_output_length, operation_timeout),
+        _ => Err(deno_error::JsErrorBox::generic(format!(
+            "unsupported zlib mode: {mode}",
+        ))),
+    }
+}
 
 // Shims for deno_node: provides stubs for modules that would normally come from
 // the full Deno runtime. This allows deno_node to work in a standalone edge runtime.

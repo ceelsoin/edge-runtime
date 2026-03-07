@@ -103,6 +103,57 @@ async fn parse_eszip(bytes: &[u8]) -> eszip::EszipV2 {
     eszip
 }
 
+fn run_module_and_expect_true(specifier: &str, source: &str, check_expr: &'static str) -> Result<(), String> {
+    let eszip_bytes = build_eszip(specifier, source);
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let local = tokio::task::LocalSet::new();
+    local.block_on(&rt, async {
+        let eszip = Arc::new(parse_eszip(&eszip_bytes).await);
+        let root = runtime_core::isolate::determine_root_specifier(&eszip)
+            .map_err(|e| format!("determine_root_specifier: {e}"))?;
+
+        let mut js_runtime = make_runtime_with_eszip(eszip);
+
+        let module_id = js_runtime
+            .load_main_es_module(&root)
+            .await
+            .map_err(|e| format!("load_main_es_module: {e}"))?;
+
+        let eval = js_runtime.mod_evaluate(module_id);
+
+        js_runtime
+            .run_event_loop(PollEventLoopOptions {
+                wait_for_inspector: false,
+                pump_v8_message_loop: true,
+            })
+            .await
+            .map_err(|e| format!("run_event_loop: {e}"))?;
+
+        eval.await.map_err(|e| format!("mod_evaluate: {e}"))?;
+
+        let val = js_runtime
+            .execute_script("<check>", check_expr)
+            .map_err(|e| format!("check script failed: {e}"))?;
+
+        let passed = {
+            deno_core::scope!(scope, js_runtime);
+            let local_val = val.open(scope);
+            local_val.is_true()
+        };
+
+        if passed {
+            Ok(())
+        } else {
+            Err("check expression evaluated to false".to_string())
+        }
+    })
+}
+
 #[test]
 fn node_process_module_can_be_imported() {
     deno_core::JsRuntime::init_platform(None);
@@ -809,7 +860,17 @@ fn additional_node_stub_modules_import_and_behave_predictably() {
     try { tls.createServer(); } catch (_) { deterministicErrors++; }
       try { repl.start(); } catch (_) { deterministicErrors++; }
       try { new vm.Script('1+1').runInThisContext(); } catch (_) { deterministicErrors++; }
-      try { zlib.gzipSync('x'); } catch (_) { deterministicErrors++; }
+
+            const zlibSyncCompat = (() => {
+                try {
+                    const gz = zlib.gzipSync('hello-zlib-sync');
+                    const plain = zlib.gunzipSync(gz);
+                    const text = typeof plain === 'string' ? plain : new TextDecoder().decode(plain);
+                    return text === 'hello-zlib-sync';
+                } catch (_) {
+                    return false;
+                }
+            })();
 
             const zlibCompat = await new Promise((resolve) => {
                 zlib.gzip('hello-zlib', (gzipErr, gz) => {
@@ -827,6 +888,29 @@ fn additional_node_stub_modules_import_and_behave_predictably() {
                     });
                 });
             });
+
+            let zlibLimitEnforced = false;
+            try {
+                const gz = await zlib.gzip('limit-check-payload');
+                await zlib.gunzip(gz, { maxOutputLength: 1 });
+            } catch (err) {
+                zlibLimitEnforced = String(err?.code || '').includes('ERR_BUFFER_TOO_LARGE');
+            }
+
+            let zlibInputLimitEnforced = false;
+            try {
+                const big = new Uint8Array(8 * 1024 * 1024 + 1);
+                await zlib.gzip(big);
+            } catch (err) {
+                zlibInputLimitEnforced = String(err?.code || '').includes('ERR_ZLIB_INPUT_TOO_LARGE');
+            }
+
+            let zlibInvalidTimeoutRejected = false;
+            try {
+                await zlib.gzip('timeout-check', { operationTimeoutMs: 0 });
+            } catch (err) {
+                zlibInvalidTimeoutRejected = String(err?.code || '').includes('ERR_INVALID_ARG_VALUE');
+            }
 
             const als = new asyncHooks.AsyncLocalStorage();
             const hook = asyncHooks.createHook({
@@ -969,6 +1053,10 @@ fn additional_node_stub_modules_import_and_behave_predictably() {
                 dnsResolveCompat &&
                 dnsReverseCompat &&
                 zlibCompat &&
+                zlibSyncCompat &&
+                zlibLimitEnforced &&
+                zlibInputLimitEnforced &&
+                zlibInvalidTimeoutRejected &&
                 httpFetchCompat &&
                 httpsFetchCompat &&
                 typeof querystring.stringify === 'function' &&
@@ -1040,5 +1128,81 @@ fn additional_node_stub_modules_import_and_behave_predictably() {
     });
 
     assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn node_zlib_timeout_guardrail_triggers_under_load() {
+        deno_core::JsRuntime::init_platform(None);
+
+        let source = r#"
+            const zlib = await import('node:zlib');
+
+            const payload = new Uint8Array(8 * 1024 * 1024);
+            payload.fill(65);
+
+            const compressed = zlib.gzipSync(payload, {
+                maxOutputLength: 64 * 1024 * 1024,
+                operationTimeoutMs: 2000,
+            });
+
+            const results = await Promise.all(
+                Array.from({ length: 6 }, async () => {
+                    try {
+                        await zlib.gunzip(compressed, {
+                            maxOutputLength: 64 * 1024 * 1024,
+                            operationTimeoutMs: 1,
+                        });
+                        return false;
+                    } catch (err) {
+                        return String(err?.code || '').includes('ERR_ZLIB_OPERATION_TIMEOUT');
+                    }
+                })
+            );
+
+            globalThis.__nodeZlibTimeoutUnderLoadOk = results.some(Boolean);
+        "#;
+
+        let result = run_module_and_expect_true(
+                "file:///node_zlib_timeout_under_load.ts",
+                source,
+                "globalThis.__nodeZlibTimeoutUnderLoadOk === true",
+        );
+
+        assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn node_zlib_runtime_config_defaults_are_respected() {
+        deno_core::JsRuntime::init_platform(None);
+
+        let source = r#"
+            globalThis.__edgeRuntimeZlibConfig = {
+                maxOutputLength: 64 * 1024 * 1024,
+                maxInputLength: 1024,
+                operationTimeoutMs: 200,
+            };
+
+            const zlib = await import('node:zlib');
+
+            const tooBigInput = new Uint8Array(2048);
+            tooBigInput.fill(7);
+
+            let runtimeDefaultsApplied = false;
+            try {
+                await zlib.gzip(tooBigInput);
+            } catch (err) {
+                runtimeDefaultsApplied = String(err?.code || '').includes('ERR_ZLIB_INPUT_TOO_LARGE');
+            }
+
+            globalThis.__nodeZlibRuntimeDefaultsOk = runtimeDefaultsApplied;
+        "#;
+
+        let result = run_module_and_expect_true(
+                "file:///node_zlib_runtime_defaults.ts",
+                source,
+                "globalThis.__nodeZlibRuntimeDefaultsOk === true",
+        );
+
+        assert!(result.is_ok(), "{result:?}");
 }
 

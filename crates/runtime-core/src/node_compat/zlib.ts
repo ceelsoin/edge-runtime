@@ -1,5 +1,21 @@
 type NodeLikeError = Error & { code?: string };
 
+const DEFAULT_MAX_OUTPUT_LENGTH = 16 * 1024 * 1024;
+const DEFAULT_MAX_INPUT_LENGTH = 8 * 1024 * 1024;
+const HARD_MAX_OUTPUT_LENGTH = 64 * 1024 * 1024;
+const HARD_MAX_INPUT_LENGTH = 8 * 1024 * 1024;
+const MAX_OUTPUT_LENGTH_FALLBACK = 0x7fff_ffff;
+const DEFAULT_OPERATION_TIMEOUT_MS = 250;
+
+type ZlibOptions = {
+  maxOutputLength?: unknown;
+  maxInputLength?: unknown;
+  operationTimeoutMs?: unknown;
+};
+
+type ZlibFormat = "gzip" | "deflate" | "deflate-raw";
+type ZlibMode = "compress" | "decompress";
+
 function notImplemented(api: string): never {
   const err = new Error(
     `[edge-runtime] ${api} is not implemented in this runtime profile`,
@@ -8,20 +24,14 @@ function notImplemented(api: string): never {
   throw err;
 }
 
-function runtimeCompressionStreams(): {
-  CompressionStreamCtor: typeof CompressionStream;
-  DecompressionStreamCtor: typeof DecompressionStream;
-} {
-  if (typeof globalThis.CompressionStream !== "function") {
-    notImplemented("zlib (CompressionStream is not available)");
-  }
-  if (typeof globalThis.DecompressionStream !== "function") {
-    notImplemented("zlib (DecompressionStream is not available)");
-  }
-  return {
-    CompressionStreamCtor: globalThis.CompressionStream,
-    DecompressionStreamCtor: globalThis.DecompressionStream,
-  };
+function runtimeCore(): { ops?: Record<string, (...args: unknown[]) => unknown> } {
+  return (globalThis as unknown as {
+    Deno?: { core?: { ops?: Record<string, (...args: unknown[]) => unknown> } };
+    __bootstrap?: { core?: { ops?: Record<string, (...args: unknown[]) => unknown> } };
+  }).Deno?.core ??
+    (globalThis as unknown as {
+      __bootstrap?: { core?: { ops?: Record<string, (...args: unknown[]) => unknown> } };
+    }).__bootstrap?.core ?? {};
 }
 
 function toBytes(input: unknown): Uint8Array {
@@ -42,22 +52,172 @@ function toNodeBufferLike(bytes: Uint8Array): unknown {
   return bytes;
 }
 
-async function transformBytes(
+function toUint8Array(value: unknown): Uint8Array {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+  if (Array.isArray(value)) return Uint8Array.from(value);
+  return toBytes(value);
+}
+
+function runtimeZlibDefaults(): {
+  maxOutputLength: number;
+  maxInputLength: number;
+  operationTimeoutMs: number;
+} {
+  const cfg = (globalThis as unknown as {
+    __edgeRuntimeZlibConfig?: {
+      maxOutputLength?: unknown;
+      maxInputLength?: unknown;
+      operationTimeoutMs?: unknown;
+    };
+  }).__edgeRuntimeZlibConfig;
+
+  const maxOutputLength = Number(cfg?.maxOutputLength);
+  const maxInputLength = Number(cfg?.maxInputLength);
+  const operationTimeoutMs = Number(cfg?.operationTimeoutMs);
+
+  return {
+    maxOutputLength: Number.isFinite(maxOutputLength) && maxOutputLength > 0
+      ? Math.floor(maxOutputLength)
+      : DEFAULT_MAX_OUTPUT_LENGTH,
+    maxInputLength: Number.isFinite(maxInputLength) && maxInputLength > 0
+      ? Math.floor(maxInputLength)
+      : DEFAULT_MAX_INPUT_LENGTH,
+    operationTimeoutMs: Number.isFinite(operationTimeoutMs) && operationTimeoutMs > 0
+      ? Math.floor(operationTimeoutMs)
+      : DEFAULT_OPERATION_TIMEOUT_MS,
+  };
+}
+
+function resolveOptions(optionsOrCb?: unknown): { maxOutputLength: number; maxInputLength: number; operationTimeoutMs: number } {
+  const defaults = runtimeZlibDefaults();
+  if (!optionsOrCb || typeof optionsOrCb === "function") {
+    return {
+      maxOutputLength: defaults.maxOutputLength,
+      maxInputLength: defaults.maxInputLength,
+      operationTimeoutMs: defaults.operationTimeoutMs,
+    };
+  }
+  if (typeof optionsOrCb !== "object") {
+    return {
+      maxOutputLength: defaults.maxOutputLength,
+      maxInputLength: defaults.maxInputLength,
+      operationTimeoutMs: defaults.operationTimeoutMs,
+    };
+  }
+
+  const opts = optionsOrCb as ZlibOptions;
+
+  let maxOutputLength = defaults.maxOutputLength;
+  if (opts.maxOutputLength !== undefined) {
+    const max = Number(opts.maxOutputLength);
+    if (!Number.isFinite(max) || max <= 0) {
+      throw Object.assign(new TypeError("maxOutputLength must be a positive number"), {
+        code: "ERR_INVALID_ARG_VALUE",
+      });
+    }
+    if (max > HARD_MAX_OUTPUT_LENGTH) {
+      throw Object.assign(new RangeError(`maxOutputLength exceeds hard cap (${HARD_MAX_OUTPUT_LENGTH} bytes)`), {
+        code: "ERR_BUFFER_TOO_LARGE",
+      });
+    }
+    maxOutputLength = Math.min(Math.floor(max), MAX_OUTPUT_LENGTH_FALLBACK);
+  }
+
+  let maxInputLength = defaults.maxInputLength;
+  if (opts.maxInputLength !== undefined) {
+    const max = Number(opts.maxInputLength);
+    if (!Number.isFinite(max) || max <= 0) {
+      throw Object.assign(new TypeError("maxInputLength must be a positive number"), {
+        code: "ERR_INVALID_ARG_VALUE",
+      });
+    }
+    if (max > HARD_MAX_INPUT_LENGTH) {
+      throw Object.assign(new RangeError(`maxInputLength exceeds hard cap (${HARD_MAX_INPUT_LENGTH} bytes)`), {
+        code: "ERR_ZLIB_INPUT_TOO_LARGE",
+      });
+    }
+    maxInputLength = Math.floor(max);
+  }
+
+  let operationTimeoutMs = defaults.operationTimeoutMs;
+  if (opts.operationTimeoutMs !== undefined) {
+    const timeout = Number(opts.operationTimeoutMs);
+    if (!Number.isFinite(timeout) || timeout <= 0) {
+      throw Object.assign(new TypeError("operationTimeoutMs must be a positive number"), {
+        code: "ERR_INVALID_ARG_VALUE",
+      });
+    }
+    operationTimeoutMs = Math.floor(timeout);
+  }
+
+  return { maxOutputLength, maxInputLength, operationTimeoutMs };
+}
+
+function mapNativeZlibError(err: unknown): never {
+  const nodeErr = err as NodeLikeError;
+  const msg = String(nodeErr?.message || "");
+  if (msg.includes("maxOutputLength")) {
+    nodeErr.code = nodeErr.code ?? "ERR_BUFFER_TOO_LARGE";
+  } else if (msg.includes("maxInputLength")) {
+    nodeErr.code = nodeErr.code ?? "ERR_ZLIB_INPUT_TOO_LARGE";
+  } else if (msg.includes("timeout")) {
+    nodeErr.code = nodeErr.code ?? "ERR_ZLIB_OPERATION_TIMEOUT";
+  } else if (msg.includes("must be greater than zero")) {
+    nodeErr.code = nodeErr.code ?? "ERR_INVALID_ARG_VALUE";
+  } else {
+    nodeErr.code = nodeErr.code ?? "ERR_ZLIB_ERROR";
+  }
+  throw nodeErr;
+}
+
+function resolveMaxOutputLength(optionsOrCb?: unknown): number {
+  return resolveOptions(optionsOrCb).maxOutputLength;
+}
+
+function resolveOperationTimeout(optionsOrCb?: unknown): number {
+  return resolveOptions(optionsOrCb).operationTimeoutMs;
+}
+
+function resolveMaxInputLength(optionsOrCb?: unknown): number {
+  return resolveOptions(optionsOrCb).maxInputLength;
+}
+
+function transformBytesSync(
   input: unknown,
-  format: "gzip" | "deflate" | "deflate-raw",
-  mode: "compress" | "decompress",
-): Promise<unknown> {
-  const { CompressionStreamCtor, DecompressionStreamCtor } = runtimeCompressionStreams();
+  format: ZlibFormat,
+  mode: ZlibMode,
+  maxOutputLength: number,
+  operationTimeoutMs: number,
+  maxInputLength: number,
+): unknown {
+  const op = runtimeCore().ops?.op_edge_zlib_transform;
+  if (typeof op !== "function") {
+    notImplemented("zlib native transform op");
+  }
   const data = toBytes(input);
+  try {
+    const output = op(format, mode, data, maxOutputLength, operationTimeoutMs, maxInputLength);
+    return toNodeBufferLike(toUint8Array(output));
+  } catch (err) {
+    mapNativeZlibError(err);
+  }
+}
 
-  const source = new Blob([data]).stream();
-  const transform = mode === "compress"
-    ? new CompressionStreamCtor(format)
-    : new DecompressionStreamCtor(format);
-
-  const output = source.pipeThrough(transform);
-  const outBuf = await new Response(output).arrayBuffer();
-  return toNodeBufferLike(new Uint8Array(outBuf));
+function transformBytesAsync(
+  input: unknown,
+  format: ZlibFormat,
+  mode: ZlibMode,
+  maxOutputLength: number,
+  operationTimeoutMs: number,
+  maxInputLength: number,
+): Promise<unknown> {
+  return Promise.resolve().then(() =>
+    transformBytesSync(input, format, mode, maxOutputLength, operationTimeoutMs, maxInputLength)
+  );
 }
 
 type ZlibCallback = (err: unknown, result?: unknown) => void;
@@ -94,7 +254,10 @@ function gzip(
   maybeCb?: unknown,
 ): Promise<unknown> | void {
   const cb = resolveCallback(optionsOrCb, maybeCb);
-  return runWithCallback(transformBytes(input, "gzip", "compress"), cb);
+  const maxOutputLength = resolveMaxOutputLength(optionsOrCb);
+  const operationTimeoutMs = resolveOperationTimeout(optionsOrCb);
+  const maxInputLength = resolveMaxInputLength(optionsOrCb);
+  return runWithCallback(transformBytesAsync(input, "gzip", "compress", maxOutputLength, operationTimeoutMs, maxInputLength), cb);
 }
 
 function gunzip(
@@ -103,7 +266,10 @@ function gunzip(
   maybeCb?: unknown,
 ): Promise<unknown> | void {
   const cb = resolveCallback(optionsOrCb, maybeCb);
-  return runWithCallback(transformBytes(input, "gzip", "decompress"), cb);
+  const maxOutputLength = resolveMaxOutputLength(optionsOrCb);
+  const operationTimeoutMs = resolveOperationTimeout(optionsOrCb);
+  const maxInputLength = resolveMaxInputLength(optionsOrCb);
+  return runWithCallback(transformBytesAsync(input, "gzip", "decompress", maxOutputLength, operationTimeoutMs, maxInputLength), cb);
 }
 
 function deflate(
@@ -112,7 +278,10 @@ function deflate(
   maybeCb?: unknown,
 ): Promise<unknown> | void {
   const cb = resolveCallback(optionsOrCb, maybeCb);
-  return runWithCallback(transformBytes(input, "deflate", "compress"), cb);
+  const maxOutputLength = resolveMaxOutputLength(optionsOrCb);
+  const operationTimeoutMs = resolveOperationTimeout(optionsOrCb);
+  const maxInputLength = resolveMaxInputLength(optionsOrCb);
+  return runWithCallback(transformBytesAsync(input, "deflate", "compress", maxOutputLength, operationTimeoutMs, maxInputLength), cb);
 }
 
 function inflate(
@@ -121,7 +290,10 @@ function inflate(
   maybeCb?: unknown,
 ): Promise<unknown> | void {
   const cb = resolveCallback(optionsOrCb, maybeCb);
-  return runWithCallback(transformBytes(input, "deflate", "decompress"), cb);
+  const maxOutputLength = resolveMaxOutputLength(optionsOrCb);
+  const operationTimeoutMs = resolveOperationTimeout(optionsOrCb);
+  const maxInputLength = resolveMaxInputLength(optionsOrCb);
+  return runWithCallback(transformBytesAsync(input, "deflate", "decompress", maxOutputLength, operationTimeoutMs, maxInputLength), cb);
 }
 
 function deflateRaw(
@@ -130,7 +302,10 @@ function deflateRaw(
   maybeCb?: unknown,
 ): Promise<unknown> | void {
   const cb = resolveCallback(optionsOrCb, maybeCb);
-  return runWithCallback(transformBytes(input, "deflate-raw", "compress"), cb);
+  const maxOutputLength = resolveMaxOutputLength(optionsOrCb);
+  const operationTimeoutMs = resolveOperationTimeout(optionsOrCb);
+  const maxInputLength = resolveMaxInputLength(optionsOrCb);
+  return runWithCallback(transformBytesAsync(input, "deflate-raw", "compress", maxOutputLength, operationTimeoutMs, maxInputLength), cb);
 }
 
 function inflateRaw(
@@ -139,7 +314,10 @@ function inflateRaw(
   maybeCb?: unknown,
 ): Promise<unknown> | void {
   const cb = resolveCallback(optionsOrCb, maybeCb);
-  return runWithCallback(transformBytes(input, "deflate-raw", "decompress"), cb);
+  const maxOutputLength = resolveMaxOutputLength(optionsOrCb);
+  const operationTimeoutMs = resolveOperationTimeout(optionsOrCb);
+  const maxInputLength = resolveMaxInputLength(optionsOrCb);
+  return runWithCallback(transformBytesAsync(input, "deflate-raw", "decompress", maxOutputLength, operationTimeoutMs, maxInputLength), cb);
 }
 
 function brotliCompress(): never {
@@ -150,28 +328,46 @@ function brotliDecompress(): never {
   return notImplemented("zlib.brotliDecompress");
 }
 
-function gzipSync(): never {
-  return notImplemented("zlib.gzipSync");
+function gzipSync(input: unknown, options?: unknown): unknown {
+  const maxOutputLength = resolveMaxOutputLength(options);
+  const operationTimeoutMs = resolveOperationTimeout(options);
+  const maxInputLength = resolveMaxInputLength(options);
+  return transformBytesSync(input, "gzip", "compress", maxOutputLength, operationTimeoutMs, maxInputLength);
 }
 
-function gunzipSync(): never {
-  return notImplemented("zlib.gunzipSync");
+function gunzipSync(input: unknown, options?: unknown): unknown {
+  const maxOutputLength = resolveMaxOutputLength(options);
+  const operationTimeoutMs = resolveOperationTimeout(options);
+  const maxInputLength = resolveMaxInputLength(options);
+  return transformBytesSync(input, "gzip", "decompress", maxOutputLength, operationTimeoutMs, maxInputLength);
 }
 
-function deflateSync(): never {
-  return notImplemented("zlib.deflateSync");
+function deflateSync(input: unknown, options?: unknown): unknown {
+  const maxOutputLength = resolveMaxOutputLength(options);
+  const operationTimeoutMs = resolveOperationTimeout(options);
+  const maxInputLength = resolveMaxInputLength(options);
+  return transformBytesSync(input, "deflate", "compress", maxOutputLength, operationTimeoutMs, maxInputLength);
 }
 
-function inflateSync(): never {
-  return notImplemented("zlib.inflateSync");
+function inflateSync(input: unknown, options?: unknown): unknown {
+  const maxOutputLength = resolveMaxOutputLength(options);
+  const operationTimeoutMs = resolveOperationTimeout(options);
+  const maxInputLength = resolveMaxInputLength(options);
+  return transformBytesSync(input, "deflate", "decompress", maxOutputLength, operationTimeoutMs, maxInputLength);
 }
 
-function deflateRawSync(): never {
-  return notImplemented("zlib.deflateRawSync");
+function deflateRawSync(input: unknown, options?: unknown): unknown {
+  const maxOutputLength = resolveMaxOutputLength(options);
+  const operationTimeoutMs = resolveOperationTimeout(options);
+  const maxInputLength = resolveMaxInputLength(options);
+  return transformBytesSync(input, "deflate-raw", "compress", maxOutputLength, operationTimeoutMs, maxInputLength);
 }
 
-function inflateRawSync(): never {
-  return notImplemented("zlib.inflateRawSync");
+function inflateRawSync(input: unknown, options?: unknown): unknown {
+  const maxOutputLength = resolveMaxOutputLength(options);
+  const operationTimeoutMs = resolveOperationTimeout(options);
+  const maxInputLength = resolveMaxInputLength(options);
+  return transformBytesSync(input, "deflate-raw", "decompress", maxOutputLength, operationTimeoutMs, maxInputLength);
 }
 
 function brotliCompressSync(): never {

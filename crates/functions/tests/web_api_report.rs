@@ -908,7 +908,7 @@ fn define_node_compat_checks() -> Vec<NodeCompatCheck> {
                 NodeCompatCheck {
                         api: "node:zlib",
                         profile: "Partial",
-                        notes: "Functional async compression subset (`gzip/gunzip/deflate/inflate/deflateRaw/inflateRaw`) via Web Compression Streams; sync/stream constructors remain deterministic stubs.",
+                        notes: "Functional async+sync one-shot compression subset (`gzip/gunzip/deflate/inflate/deflateRaw/inflateRaw`) backed by native runtime ops with runtime-configurable defaults under immutable hard output/input ceilings and operation-time guardrail; stream constructors remain deterministic stubs.",
                         js_check: r#"(() => {
                             const key = '__edge_node_zlib_check';
                             if (globalThis[key] === undefined) {
@@ -925,15 +925,22 @@ fn define_node_compat_checks() -> Vec<NodeCompatCheck> {
                                                 return;
                                             }
                                             const text = typeof plain === 'string' ? plain : new TextDecoder().decode(plain);
-                                            let syncStub = false;
-                                            try { m.gzipSync('x'); } catch (err) { syncStub = String(err?.message || '').includes('not implemented'); }
+                                            let syncCompat = false;
+                                            try {
+                                                const syncGz = m.gzipSync('report-zlib-sync');
+                                                const syncPlain = m.gunzipSync(syncGz);
+                                                const syncText = typeof syncPlain === 'string' ? syncPlain : new TextDecoder().decode(syncPlain);
+                                                syncCompat = syncText === 'report-zlib-sync';
+                                            } catch (_) {
+                                                syncCompat = false;
+                                            }
                                             globalThis[key] =
                                                 text === 'report-zlib' &&
                                                 typeof m.deflate === 'function' &&
                                                 typeof m.inflate === 'function' &&
                                                 typeof m.deflateRaw === 'function' &&
                                                 typeof m.inflateRaw === 'function' &&
-                                                syncStub
+                                                syncCompat
                                                 ? 'partial' : 'none';
                                         });
                                     });

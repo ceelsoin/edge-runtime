@@ -18,6 +18,7 @@ This directory contains scripts for bundling, deploying, and load-testing the De
 ### Automation Scripts
 - **`run-benchmarks.sh`** - Full end-to-end benchmark (build, bundle, deploy, test everything)
 - **`quick-benchmark.sh`** - Fast re-run of benchmarks without rebuilding
+- **`zlib-guardrail-benchmark.sh`** - Focused benchmark/check for `node:zlib` hardening guardrails
 - **`start-observability-runtime.sh`** - Start observability docker stack + run edge runtime with OTEL + open Grafana
 
 ## Prerequisites
