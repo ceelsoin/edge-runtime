@@ -24,6 +24,8 @@ use runtime_core::permissions::create_permissions_container;
 use tungstenite::{Message, WebSocket};
 use url::Url;
 
+use super::embedded_assert;
+
 struct CliStyle {
     enabled: bool,
 }
@@ -164,7 +166,7 @@ impl Loader for FileLoader {
     ) -> deno_graph::source::LoadFuture {
         let specifier = specifier.clone();
         Box::pin(async move {
-            if specifier.scheme() == "ext" {
+            if specifier.scheme() == "edge" || specifier.scheme() == "ext" {
                 if let Some(content) = load_edge_assert_module(&specifier)? {
                     return Ok(Some(LoadResponse::Module {
                         content: content.into(),
@@ -206,73 +208,13 @@ impl Loader for FileLoader {
 }
 
 fn rewrite_edge_assert_imports(content: Vec<u8>) -> Result<Vec<u8>, LoadError> {
-    let source = String::from_utf8_lossy(&content).to_string();
-    if !source.contains("edge://assert/") {
-        return Ok(content);
-    }
-
-    let cwd = std::env::current_dir().map_err(|e| {
-        LoadError::Other(Arc::new(deno_error::JsErrorBox::generic(format!(
-            "failed to resolve current dir for edge:assert rewrite: {e}"
-        ))))
-    })?;
-
-    let user_mod_path = cwd.join("crates/runtime-core/src/assert/user_mod.ts");
-    let assert_path = cwd.join("crates/runtime-core/src/assert/assert.ts");
-
-    let user_mod_url = Url::from_file_path(&user_mod_path).map_err(|()| {
-        LoadError::Other(Arc::new(deno_error::JsErrorBox::generic(format!(
-            "failed to convert '{}' to file URL",
-            user_mod_path.display()
-        ))))
-    })?;
-    let assert_url = Url::from_file_path(&assert_path).map_err(|()| {
-        LoadError::Other(Arc::new(deno_error::JsErrorBox::generic(format!(
-            "failed to convert '{}' to file URL",
-            assert_path.display()
-        ))))
-    })?;
-
-    let rewritten = source
-        .replace("edge://assert/mod.ts", user_mod_url.as_str())
-        .replace("edge://assert/assert.ts", assert_url.as_str());
-
-    Ok(rewritten.into_bytes())
+    Ok(embedded_assert::rewrite_edge_assert_imports(content))
 }
 
 fn load_edge_assert_module(
     specifier: &deno_graph::ModuleSpecifier,
 ) -> Result<Option<Vec<u8>>, LoadError> {
-    let relative_path = match specifier.as_str() {
-        "edge://assert/mod.ts" => {
-            return Ok(Some(b"export * from 'edge://assert/assert.ts';\n".to_vec()));
-        }
-        "edge://assert/assert.ts" => "crates/runtime-core/src/assert/assert.ts",
-        "ext:edge_assert/mod.ts" => "crates/runtime-core/src/assert/mod.ts",
-        "ext:edge_assert/assert.ts" => "crates/runtime-core/src/assert/assert.ts",
-        "ext:edge_assert/mock/mod.ts" => "crates/runtime-core/src/assert/mock/mod.ts",
-        "ext:edge_assert/mock/mockFn.ts" => "crates/runtime-core/src/assert/mock/mockFn.ts",
-        "ext:edge_assert/mock/spy.ts" => "crates/runtime-core/src/assert/mock/spy.ts",
-        "ext:edge_assert/mock/fetch.ts" => "crates/runtime-core/src/assert/mock/fetch.ts",
-        "ext:edge_assert/mock/time.ts" => "crates/runtime-core/src/assert/mock/time.ts",
-        _ => return Ok(None),
-    };
-
-    let cwd = std::env::current_dir().map_err(|e| {
-        LoadError::Other(Arc::new(deno_error::JsErrorBox::generic(format!(
-            "failed to resolve current dir for ext modules: {e}"
-        ))))
-    })?;
-
-    let module_path = cwd.join(relative_path);
-    let content = std::fs::read(&module_path).map_err(|e| {
-        LoadError::Other(Arc::new(deno_error::JsErrorBox::generic(format!(
-            "failed to read '{}': {e}",
-            module_path.display()
-        ))))
-    })?;
-
-    Ok(Some(content))
+    embedded_assert::load_module_bytes(specifier)
 }
 
 pub fn run(args: TestArgs) -> Result<(), anyhow::Error> {

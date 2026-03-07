@@ -440,8 +440,10 @@ Implementacao atual:
 **Ref:** AUDIT §3.4
 
 - [ ] Usar variável `EDGE_RUNTIME_ROOT` ou auto-detectar via `Cargo.toml` parent walk
-- [ ] Ou embutir assets no binário via `include_str!` / `include_bytes!`
-- [ ] Adicionar testes que rodam de diretórios não-raiz
+- [x] Ou embutir assets no binário via `include_str!` / `include_bytes!`
+- [x] Adicionar testes que rodam de diretórios não-raiz
+
+**Status:** Concluido via assets TS nativos embutidos no binario (`include_str!`) para `edge://assert/*` e `ext:edge_assert/*`, removendo dependencia de paths da raiz do repositorio.
 
 ### 3.8 Observabilidade de Logs (Runtime + Isolate)
 

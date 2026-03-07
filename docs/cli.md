@@ -563,7 +563,7 @@ deno-edge-runtime bundle --entrypoint <FILE> --output <FILE>
   - If `deno` is available in `PATH`, runs `deno check` first.
   - If not available, falls back to syntax/module-graph validation only.
 - Result is written as a serialized `BundlePackage` containing ESZIP bytes.
-- Supports `edge://assert/*` imports through internal rewrite/loader handling.
+- Supports `edge://assert/*` and `ext:edge_assert/*` through embedded native modules bundled in the binary (`include_str!`).
 
 ### Examples
 

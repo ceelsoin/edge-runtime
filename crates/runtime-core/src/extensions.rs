@@ -344,15 +344,22 @@ mod tests {
     #[test]
     fn get_extensions_returns_expected_count() {
         let exts = get_extensions();
-        // 12 extensions by default (no edge_assert in production profile)
-        assert_eq!(exts.len(), 12, "expected 12 extensions, got {}", exts.len());
+        // 13 extensions by default (no edge_assert in production profile)
+        assert_eq!(exts.len(), 13, "expected 13 extensions, got {}", exts.len());
     }
 
     #[test]
     fn get_extensions_with_assert_returns_expected_count() {
+        let base_exts = get_extensions();
         let exts = get_extensions_with_edge_assert(true);
-        // 13 extensions with edge_assert enabled
-        assert_eq!(exts.len(), 13, "expected 13 extensions, got {}", exts.len());
+        // Profile with edge_assert should always add exactly one extension.
+        assert_eq!(
+            exts.len(),
+            base_exts.len() + 1,
+            "expected assert profile to add one extension (base={}, assert={})",
+            base_exts.len(),
+            exts.len()
+        );
     }
 
     #[test]
