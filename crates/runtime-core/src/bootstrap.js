@@ -72,6 +72,44 @@ import { EventSource } from "ext:deno_fetch/27_eventsource.js";
 import "ext:deno_net/01_net.js";
 import "ext:deno_net/02_tls.js";
 
+// node:* compatibility modules (must be evaluated to satisfy extension ESM checks)
+import "node:process";
+import "node:assert";
+import "node:async_hooks";
+import "node:child_process";
+import "node:cluster";
+import "node:console";
+import "node:diagnostics_channel";
+import "node:dgram";
+import "node:dns";
+import "node:buffer";
+import "node:events";
+import "node:util";
+import "node:path";
+import "node:url";
+import "node:querystring";
+import "node:punycode";
+import "node:stream";
+import "node:string_decoder";
+import "node:os";
+import "node:net";
+import "node:http";
+import "node:https";
+import "node:http2";
+import "node:tls";
+import "node:perf_hooks";
+import "node:inspector";
+import "node:readline";
+import "node:repl";
+import "node:v8";
+import "node:vm";
+import "node:zlib";
+import "node:timers";
+import "node:timers/promises";
+import "node:module";
+import "node:fs";
+import "node:fs/promises";
+
 // edge_assert (native assert helpers for user imports)
 // Optional: only present when CLI test mode enables this extension.
 import("ext:edge_assert/mod.ts").catch(() => {
@@ -124,6 +162,32 @@ Object.assign(globalThis, {
   clearTimeout,
   clearInterval,
 });
+
+// Node-like immediate timers (compat subset).
+if (typeof globalThis.setImmediate !== "function") {
+  let __edgeImmediateId = 1;
+  const __edgeImmediateMap = new Map();
+
+  globalThis.setImmediate = function setImmediateCompat(callback, ...args) {
+    if (typeof callback !== "function") {
+      throw new TypeError("setImmediate callback must be a function");
+    }
+    const handle = __edgeImmediateId++;
+    __edgeImmediateMap.set(handle, true);
+    queueMicrotask(() => {
+      if (!__edgeImmediateMap.has(handle)) return;
+      __edgeImmediateMap.delete(handle);
+      callback(...args);
+    });
+    return handle;
+  };
+
+  globalThis.clearImmediate = function clearImmediateCompat(handle) {
+    if (__edgeImmediateMap.has(handle)) {
+      __edgeImmediateMap.delete(handle);
+    }
+  };
+}
 
 // Abort
 Object.assign(globalThis, {
@@ -202,6 +266,144 @@ Object.assign(globalThis, {
   fetch,
   EventSource,
 });
+
+// Minimal Buffer compatibility for common SSR/tooling paths.
+if (typeof globalThis.Buffer === "undefined") {
+  function normalizeEncoding(encoding) {
+    const enc = String(encoding || "utf8").toLowerCase();
+    if (enc === "utf-8") return "utf8";
+    return enc;
+  }
+
+  function decodeBytes(bytes, encoding) {
+    const enc = normalizeEncoding(encoding);
+    if (enc === "hex") {
+      return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+    }
+    if (enc === "base64") {
+      let binary = "";
+      for (const b of bytes) binary += String.fromCharCode(b);
+      return btoa(binary);
+    }
+    return new TextDecoder("utf-8").decode(bytes);
+  }
+
+  function encodeString(input, encoding) {
+    const enc = normalizeEncoding(encoding);
+    if (enc === "hex") {
+      const clean = String(input).replace(/\s+/g, "");
+      if (clean.length % 2 !== 0) {
+        throw new TypeError("Invalid hex string length");
+      }
+      const out = new Uint8Array(clean.length / 2);
+      for (let i = 0; i < clean.length; i += 2) {
+        const value = Number.parseInt(clean.slice(i, i + 2), 16);
+        if (Number.isNaN(value)) {
+          throw new TypeError("Invalid hex string");
+        }
+        out[i / 2] = value;
+      }
+      return out;
+    }
+    if (enc === "base64") {
+      const binary = atob(String(input));
+      const out = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+      return out;
+    }
+    return new TextEncoder().encode(String(input));
+  }
+
+  class EdgeBuffer extends Uint8Array {
+    static from(value, encodingOrOffset, length) {
+      if (typeof value === "string") {
+        return new EdgeBuffer(encodeString(value, encodingOrOffset));
+      }
+
+      if (value instanceof ArrayBuffer) {
+        const offset = Number(encodingOrOffset || 0);
+        const viewLength = length === undefined ? value.byteLength - offset : Number(length);
+        return new EdgeBuffer(new Uint8Array(value, offset, viewLength));
+      }
+
+      if (ArrayBuffer.isView(value)) {
+        return new EdgeBuffer(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+      }
+
+      if (Array.isArray(value)) {
+        return new EdgeBuffer(value);
+      }
+
+      throw new TypeError("Unsupported Buffer.from input");
+    }
+
+    static alloc(size, fill = 0, encoding = "utf8") {
+      const out = new EdgeBuffer(Number(size));
+      if (typeof fill === "string") {
+        const bytes = encodeString(fill, encoding);
+        for (let i = 0; i < out.length; i++) out[i] = bytes[i % Math.max(1, bytes.length)] || 0;
+      } else {
+        out.fill(Number(fill) & 0xff);
+      }
+      return out;
+    }
+
+    static allocUnsafe(size) {
+      return new EdgeBuffer(Number(size));
+    }
+
+    static isBuffer(value) {
+      return value instanceof EdgeBuffer;
+    }
+
+    static byteLength(value, encoding = "utf8") {
+      if (typeof value === "string") {
+        return encodeString(value, encoding).byteLength;
+      }
+      if (value instanceof ArrayBuffer) return value.byteLength;
+      if (ArrayBuffer.isView(value)) return value.byteLength;
+      return 0;
+    }
+
+    static concat(list, totalLength) {
+      if (!Array.isArray(list)) {
+        throw new TypeError("Buffer.concat list must be an array");
+      }
+      const length = totalLength === undefined
+        ? list.reduce((sum, item) => sum + item.length, 0)
+        : Number(totalLength);
+      const out = new EdgeBuffer(length);
+      let offset = 0;
+      for (const item of list) {
+        out.set(item, offset);
+        offset += item.length;
+        if (offset >= length) break;
+      }
+      return out;
+    }
+
+    toString(encoding = "utf8", start = 0, end = this.length) {
+      const slice = this.subarray(start, end);
+      return decodeBytes(slice, encoding);
+    }
+
+    equals(other) {
+      if (!EdgeBuffer.isBuffer(other)) return false;
+      if (other.length !== this.length) return false;
+      for (let i = 0; i < this.length; i++) {
+        if (this[i] !== other[i]) return false;
+      }
+      return true;
+    }
+  }
+
+  Object.defineProperty(globalThis, "Buffer", {
+    value: EdgeBuffer,
+    writable: false,
+    configurable: false,
+    enumerable: true,
+  });
+}
 
 // Install a stable fetch entrypoint that supports test-time mocking without
 // allowing user code to reassign globalThis.fetch.

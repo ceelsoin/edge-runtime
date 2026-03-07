@@ -25,6 +25,51 @@ deno_core::extension!(
     esm = [dir "src", "bootstrap.js"],
 );
 
+// Minimal Node built-ins for compatibility with SSR/tooling ecosystems.
+deno_core::extension!(
+    edge_node_compat,
+    esm = [
+        dir "src/node_compat",
+        "node:process" = "process.ts",
+        "node:assert" = "assert.ts",
+        "node:async_hooks" = "async_hooks.ts",
+        "node:child_process" = "child_process.ts",
+        "node:cluster" = "cluster.ts",
+        "node:console" = "console.ts",
+        "node:diagnostics_channel" = "diagnostics_channel.ts",
+        "node:dgram" = "dgram.ts",
+        "node:dns" = "dns.ts",
+        "node:buffer" = "buffer.ts",
+        "node:events" = "events.ts",
+        "node:util" = "util.ts",
+        "node:path" = "path.ts",
+        "node:url" = "url.ts",
+        "node:querystring" = "querystring.ts",
+        "node:punycode" = "punycode.ts",
+        "node:stream" = "stream.ts",
+        "node:string_decoder" = "string_decoder.ts",
+        "node:os" = "os.ts",
+        "node:net" = "net.ts",
+        "node:http" = "http.ts",
+        "node:https" = "https.ts",
+        "node:http2" = "http2.ts",
+        "node:tls" = "tls.ts",
+        "node:perf_hooks" = "perf_hooks.ts",
+        "node:inspector" = "inspector.ts",
+        "node:readline" = "readline.ts",
+        "node:repl" = "repl.ts",
+        "node:v8" = "v8.ts",
+        "node:vm" = "vm.ts",
+        "node:zlib" = "zlib.ts",
+        "node:timers" = "timers.ts",
+        "node:timers/promises" = "timers_promises.ts",
+        "node:module" = "module.ts",
+        "node:request" = "request.ts",
+        "node:fs" = "fs.ts",
+        "node:fs/promises" = "fs_promises.ts",
+    ],
+);
+
 // Shims for deno_node: provides stubs for modules that would normally come from
 // the full Deno runtime. This allows deno_node to work in a standalone edge runtime.
 // The extension name is "runtime" so that imports like "ext:runtime/..." resolve here.
@@ -238,6 +283,8 @@ pub fn get_extensions_with_edge_assert(include_edge_assert: bool) -> Vec<Extensi
         deno_telemetry::deno_telemetry::init(),
         // 8. Fetch (depends on web, net, tls) - fetch API
         deno_fetch::deno_fetch::init(deno_fetch::Options::default()),
+        // 9. Minimal Node compatibility modules (node:process, node:buffer)
+        edge_node_compat::init(),
         // 9. Node shim - provides minimal constants for deno_crypto
         deno_node::init(),
         // 10. Crypto (depends on webidl, web, node shim) - Web Crypto API

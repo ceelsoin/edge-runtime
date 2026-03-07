@@ -3,7 +3,7 @@
 > Baseado na auditoria de segurança e arquitetura realizada em 05/03/2026.
 > Cada item referencia o finding correspondente no `AUDIT.md`.
 >
-> Última atualização: 07/03/2026 (item 3.9 concluído: proxy de saída em escopo global de runtime).
+> Última atualização: 07/03/2026 (P1 de `node:http`/`node:https` avançado para compat client-side via `fetch`, com adapter `request` por contrato).
 > Commits de referência: `92aa473`, `6607a2b`, `4933dda`.
 > Inclui também mudanças locais ainda não commitadas em `functions/runtime-core`.
 
@@ -534,16 +534,16 @@ Notas de cobertura:
 **Objetivo:** habilitar superfície Node mínima exigida por toolchains e libs de SSR/RSC.
 
 - [x] Expor `globalThis.process` (subset seguro e estável)
-- [ ] Expor `globalThis.Buffer` compatível (`node:buffer`)
-- [ ] Expor `setImmediate`/`clearImmediate`
+- [x] Expor `globalThis.Buffer` compatível (`node:buffer`)
+- [x] Expor `setImmediate`/`clearImmediate`
 - [ ] Implementar suporte inicial aos módulos:
-    - [ ] `node:buffer`
-    - [ ] `node:events`
-    - [ ] `node:util`
-    - [ ] `node:path`
-    - [ ] `node:stream`
-    - [ ] `node:process`
-- [ ] Implementar `node:os` compatível por contrato (pode ser stub estável)
+    - [x] `node:buffer`
+    - [x] `node:events`
+    - [x] `node:util`
+    - [x] `node:path`
+    - [x] `node:stream`
+    - [x] `node:process`
+- [x] Implementar `node:os` compatível por contrato (pode ser stub estável)
 
 **Critério de aceite:** app SSR simples com dependências Node utilitárias sobe sem erro de import em `node:*` básicos.
 
@@ -553,11 +553,11 @@ Notas de cobertura:
 
 **Objetivo:** reduzir quebras por dependências CommonJS ainda presentes no ecossistema Next.
 
-- [ ] Implementar `createRequire` básico para contexto ESM
-- [ ] Implementar interop parcial `module.exports` <-> `default` export
-- [ ] Suportar `require()` para built-ins permitidos
-- [ ] Definir política explícita para módulos Node não suportados (erro determinístico e mensagem clara)
-- [ ] Adicionar testes de resolução com pacotes híbridos ESM/CJS
+- [x] Implementar `createRequire` básico para contexto ESM
+- [x] Implementar interop parcial `module.exports` <-> `default` export
+- [x] Suportar `require()` para built-ins permitidos
+- [x] Definir política explícita para módulos Node não suportados (erro determinístico e mensagem clara)
+- [x] Adicionar testes de resolução com pacotes híbridos ESM/CJS
 
 **Critério de aceite:** libs comuns que ainda chamam `require()` indiretamente não falham na inicialização.
 
@@ -665,16 +665,16 @@ Notas de cobertura:
 
 **Objetivo:** permitir compatibilidade de ecossistema sem prometer filesystem real.
 
-- [ ] Implementar `node:fs` e `node:fs/promises` em modo `Stub/Partial` por perfil
-- [ ] Definir comportamento por categoria:
-    - [ ] Operações de leitura/escrita real -> erro determinístico (`EOPNOTSUPP`/mensagem clara)
-    - [ ] APIs utilitárias sem side-effect (ex.: normalização de paths em chamadas internas) -> permitido quando seguro
-    - [ ] APIs de watch/stream de arquivo -> `not implemented`
-- [ ] Garantir que erro indique claramente: "sem acesso real ao FS neste runtime"
-- [ ] Adicionar testes cobrindo:
-    - [ ] `import "node:fs"` não falha
-    - [ ] `readFile` falha com erro esperado
-    - [ ] chamadas não suportadas retornam erro estável (sem panic)
+- [x] Implementar `node:fs` e `node:fs/promises` em modo `Stub/Partial` por perfil
+- [x] Definir comportamento por categoria:
+    - [x] Operações de leitura/escrita real -> erro determinístico (`EOPNOTSUPP`/mensagem clara)
+    - [x] APIs utilitárias sem side-effect (ex.: normalização de paths em chamadas internas) -> permitido quando seguro
+    - [x] APIs de watch/stream de arquivo -> `not implemented`
+- [x] Garantir que erro indique claramente: "sem acesso real ao FS neste runtime"
+- [x] Adicionar testes cobrindo:
+    - [x] `import "node:fs"` não falha
+    - [x] `readFile` falha com erro esperado
+    - [x] chamadas não suportadas retornam erro estável (sem panic)
 
 **Critério de aceite:** bibliotecas que importam `fs` para feature detection não quebram bootstrap; uso real de disco falha de forma previsível.
 
@@ -722,6 +722,98 @@ Notas de cobertura:
 - [ ] Documentar matriz de risco/segurança por flag
 
 **Critério de aceite:** usuário consegue habilitar compat gradualmente sem alterar código da aplicação.
+
+---
+
+### 5.13 Gap Analysis — Cloudflare Workers Node APIs (baseline oficial)
+
+**Objetivo:** alinhar o runtime com o comportamento documentado da Cloudflare para Node APIs, preservando as garantias de sandbox (sem acesso ao host físico).
+
+**Fontes de referência (baseline):**
+- [Node.js compatibility index](https://developers.cloudflare.com/workers/runtime-apis/nodejs/)
+- [process](https://developers.cloudflare.com/workers/runtime-apis/nodejs/process/)
+- Diretório de docs: `src/content/docs/workers/runtime-apis/nodejs/*` em `cloudflare/cloudflare-docs` (branch `production`)
+
+**Catálogo de diferenças atuais (runtime vs Cloudflare):**
+
+1. `node:process`
+- **Cloudflare:** `process.env` pode ser populado por bindings/flags, `stdout/stderr/stdin` como streams, `cwd` inicial `/bundle`, `chdir` suportado com FS virtual.
+- **Runtime atual:** `env` apenas em memória local (não populado por bindings), `stdout/stderr/stdin` ausentes, `cwd` fixo `/`, `chdir` bloqueado por sandbox.
+- **Status:** divergência funcional relevante.
+
+2. `node:http` e `node:https`
+- **Cloudflare:** `request/get` funcionais como wrapper de `fetch` (com restrições); suporte adicional a server-side APIs via `cloudflare:node` + flags.
+- **Runtime atual:** `request/get` bloqueados por política (`ERR_USE_FETCH`), `createServer` não implementado.
+- **Status:** divergência funcional intencional (segurança), precisa de modo de compat opcional para paridade.
+
+3. `node:fs` e `node:fs/promises`
+- **Cloudflare:** VFS com `/bundle` (read-only), `/tmp` (ephemeral por request), `/dev/*`; ampla API com limitações documentadas.
+- **Runtime atual:** stub seguro (`EOPNOTSUPP`) sem VFS.
+- **Status:** grande gap de paridade.
+
+4. `node:dns`
+- **Cloudflare:** maioria da API disponível via DoH/1.1.1.1; apenas alguns métodos não implementados (`lookup`, `lookupService`, `resolve`).
+- **Runtime atual:** módulo majoritariamente stub/non-functional.
+- **Status:** gap alto.
+
+5. `node:net`
+- **Cloudflare:** `net.Socket`/`connect` suportados para outbound TCP; `net.Server` não suportado.
+- **Runtime atual:** `connect` não implementado; existe `createServer` stub.
+- **Status:** gap alto e desalinhamento de superfície.
+
+6. `node:tls`
+- **Cloudflare:** `connect`, `TLSSocket`, `checkServerIdentity`, `createSecureContext` disponíveis; server-side TLS Node não suportado.
+- **Runtime atual:** `connect/createSecureContext` stubs não funcionais.
+- **Status:** gap alto.
+
+7. `node:url`
+- **Cloudflare:** `domainToASCII`/`domainToUnicode` e demais APIs de URL documentadas.
+- **Runtime atual:** check de compat está `None` no relatório para `node:url`.
+- **Status:** gap funcional imediato (alta prioridade).
+
+8. `node:util`
+- **Cloudflare:** `promisify/callbackify`, `util.types` (com subset explícito), `MIMEType`.
+- **Runtime atual:** subset básico (`format`, `inspect`, `promisify`, `types`), sem confirmação de `MIMEType`.
+- **Status:** gap médio.
+
+9. `node:diagnostics_channel`
+- **Cloudflare:** inclui `TracingChannel` e integração com Tail Workers.
+- **Runtime atual:** pub/sub básico.
+- **Status:** gap médio.
+
+10. `node:async_hooks` / `AsyncLocalStorage`
+- **Cloudflare:** ALS funcional com caveats documentados, `AsyncResource` parcial.
+- **Runtime atual:** classificação stub/parcial.
+- **Status:** gap alto para frameworks modernos.
+
+11. `node:zlib`
+- **Cloudflare:** módulo funcional (gzip/deflate/brotli).
+- **Runtime atual:** stub/non-functional.
+- **Status:** gap médio/alto.
+
+12. `node:events` e `node:buffer`
+- **Cloudflare:** suporte amplo (com diferenças específicas documentadas).
+- **Runtime atual:** funcionais para casos comuns, mas com cobertura parcial no relatório.
+- **Status:** reduzir gap via testes de semântica avançada e edge-cases.
+
+**Backlog de convergência (prioridade):**
+
+- [x] **P0:** fechar `node:url` para sair de `None` no relatório (incluindo `domainToASCII`/`domainToUnicode`).
+- [x] **P0:** adicionar `process.stdout/stderr/stdin` compatíveis e `cwd` virtual (`/bundle`), sem acesso ao host.
+- [ ] **P1:** implementar VFS seguro (`/bundle`, `/tmp`, `/dev`) para `node:fs` sem quebrar isolamento.
+- [x] **P1:** modo `http/https` compat opcional (wrapper `fetch` dentro de handler) mantendo default seguro atual.
+    - Status aplicado: client-side `request/get` em `node:http` e `node:https` já operam via wrapper `fetch`; APIs server-side permanecem não funcionais por sandbox.
+    - Status aplicado: adapter `request` com contrato básico (`get/post/put/patch/del/delete`, callback `(err,res,body)`, `write/end`) sobre o wrapper HTTP compat.
+- [ ] **P1:** `node:net` outbound-only (sem `net.Server`) e `node:tls` outbound compatível.
+- [ ] **P2:** `dns` funcional via resolver controlado (DoH/subrequest), com limites explícitos.
+- [ ] **P2:** expandir `util` (`MIMEType`) e `diagnostics_channel` (`TracingChannel`) conforme documentação.
+- [ ] **P2:** elevar `async_hooks`/ALS de stub para uso real com testes de propagação de contexto.
+- [ ] **P3:** substituir `zlib` stub por implementação funcional (ou bridge para APIs nativas de compressão).
+
+**Critério de aceite desta trilha:**
+- Matriz `node:*` no relatório com classificação convergente ao baseline Cloudflare.
+- Diferenças remanescentes explicitamente documentadas como "intencionais por sandbox".
+- Nenhuma feature de compatibilidade libera acesso ao host físico.
 
 ---
 

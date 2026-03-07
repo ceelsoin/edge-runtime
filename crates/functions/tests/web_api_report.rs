@@ -4,7 +4,7 @@
 //! a comprehensive set of JS checks. It then generates a markdown report
 //! at `WEB_STANDARDS_REPORT.md` in the project root.
 
-use deno_core::{JsRuntime, RuntimeOptions};
+use deno_core::{JsRuntime, PollEventLoopOptions, RuntimeOptions};
 use runtime_core::extensions;
 use runtime_core::permissions::create_permissions_container;
 use std::fmt::Write as FmtWrite;
@@ -44,8 +44,31 @@ struct ApiCheck {
     status: String,
 }
 
+#[derive(Debug, Clone)]
+struct NodeCompatCheck {
+    api: &'static str,
+    profile: &'static str,
+    notes: &'static str,
+    js_check: &'static str,
+    /// "full", "partial", or "none"
+    status: String,
+}
+
 /// Evaluate a JS expression and return its string result.
 fn eval_js(runtime: &mut JsRuntime, js: &str) -> String {
+    for _ in 0..6 {
+        let status = eval_js_once(runtime, js);
+        if status != "pending" {
+            return status;
+        }
+        if !pump_event_loop(runtime) {
+            return "none".to_string();
+        }
+    }
+    "none".to_string()
+}
+
+fn eval_js_once(runtime: &mut JsRuntime, js: &str) -> String {
     match runtime.execute_script("<check>", js.to_string()) {
         Ok(val) => {
             deno_core::scope!(scope, runtime);
@@ -58,6 +81,865 @@ fn eval_js(runtime: &mut JsRuntime, js: &str) -> String {
         }
         Err(_) => "none".to_string(),
     }
+}
+
+fn pump_event_loop(runtime: &mut JsRuntime) -> bool {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+        {
+                Ok(rt) => rt,
+                Err(_) => return false,
+        };
+
+        let local = tokio::task::LocalSet::new();
+        local
+                .block_on(&rt, async {
+                        runtime
+                                .run_event_loop(PollEventLoopOptions {
+                                        wait_for_inspector: false,
+                                        pump_v8_message_loop: true,
+                                })
+                                .await
+                })
+                .is_ok()
+}
+
+fn define_node_compat_checks() -> Vec<NodeCompatCheck> {
+        vec![
+                NodeCompatCheck {
+                        api: "node:process",
+                        profile: "Partial",
+                                                notes: "Sandboxed process subset with in-memory `env`, virtual cwd (`/bundle`), and stdio compatibility streams.",
+                        js_check: r#"(() => {
+                                                        return (
+                                                            typeof globalThis.process === 'object' &&
+                                                            typeof process.nextTick === 'function' &&
+                                                            process.env.PATH === undefined &&
+                                                            process.cwd() === '/bundle' &&
+                                                            typeof process.stdout?.write === 'function' &&
+                                                            typeof process.stderr?.write === 'function'
+                                                        ) ? 'partial' : 'none';
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:buffer",
+                        profile: "Partial",
+                        notes: "Common Buffer operations for SSR/tooling (`from`, `alloc`, `concat`, `byteLength`, `toString`).",
+                        js_check: r#"(() => {
+                            try {
+                                const a = Buffer.from('hello');
+                                const b = Buffer.concat([a, Buffer.from(' world')]);
+                                return (Buffer.isBuffer(a) && b.toString('utf8') === 'hello world') ? 'partial' : 'none';
+                            } catch (_e) {
+                                return 'none';
+                            }
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:events",
+                        profile: "Partial",
+                        notes: "EventEmitter-compatible surface for common listener/emit flows.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_events_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:events').then(({ EventEmitter }) => {
+                                    const em = new EventEmitter();
+                                    let count = 0;
+                                    em.on('x', () => count++);
+                                    em.emit('x');
+                                    globalThis[key] = count === 1 ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:util",
+                        profile: "Partial",
+                        notes: "Utility subset (`format`, `inspect`, `promisify`, `types`) used by dependencies.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_util_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:util').then((util) => {
+                                    const formatted = util.format('x:%d', 2);
+                                    globalThis[key] = typeof util.promisify === 'function' && formatted === 'x:2' ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:path",
+                        profile: "Partial",
+                        notes: "Deterministic path helpers for module/tooling compatibility.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_path_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:path').then((path) => {
+                                    globalThis[key] = path.join('/a', 'b') === '/a/b' ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:stream",
+                        profile: "Partial",
+                        notes: "Basic stream primitives/pipeline for compatibility paths; not full Node stream semantics.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_stream_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:stream').then((stream) => {
+                                    globalThis[key] = typeof stream.Readable === 'function' && typeof stream.pipeline === 'function' ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:os",
+                        profile: "Stub/Partial",
+                        notes: "Contract-stable environment info and deterministic errors for unsupported host-affecting calls.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_os_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:os').then((os) => {
+                                    let throwsDeterministic = false;
+                                    try { os.setPriority(0, 0); } catch (_e) { throwsDeterministic = true; }
+                                    globalThis[key] = typeof os.platform === 'function' && throwsDeterministic ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:module",
+                        profile: "Partial",
+                        notes: "`createRequire` and built-in-only `require()` with explicit deterministic policy for unsupported modules.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_module_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:module').then((m) => {
+                                    const req = m.createRequire('file:///edge-test.js');
+                                    const path = req('path');
+                                    let unsupported = false;
+                                    try { req('definitely_not_real_builtin'); } catch (_e) { unsupported = true; }
+                                    globalThis[key] = typeof path.join === 'function' && unsupported ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:fs",
+                        profile: "Stub",
+                        notes: "Imports and feature-detection succeed; real filesystem operations fail deterministically (`EOPNOTSUPP`, no host FS access).",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_fs_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:fs').then((fs) => {
+                                    let deterministic = false;
+                                    try {
+                                        fs.readFileSync('/tmp/test.txt');
+                                    } catch (err) {
+                                        deterministic = err?.code === 'EOPNOTSUPP';
+                                    }
+                                    globalThis[key] = typeof fs.existsSync === 'function' && deterministic ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:fs/promises",
+                        profile: "Stub",
+                        notes: "Promise APIs reject deterministically with stable error shape; no real disk access.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_fs_promises_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:fs/promises').then((fsp) => {
+                                    fsp.readFile('/tmp/test.txt')
+                                        .then(() => { globalThis[key] = 'none'; })
+                                        .catch((err) => { globalThis[key] = err?.code === 'EOPNOTSUPP' ? 'partial' : 'none'; });
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:async_hooks",
+                        profile: "Stub/Partial",
+                        notes: "Async context tracking compatibility surface for ecosystems that import async hooks.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_async_hooks_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:async_hooks').then((m) => {
+                                    const als = new m.AsyncLocalStorage();
+                                    globalThis[key] = typeof m.createHook === 'function' && als.run(1, () => als.getStore()) === 1 ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:child_process",
+                        profile: "Stub/Partial",
+                        notes: "Non-functional process-spawn APIs with deterministic not-implemented behavior.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_child_process_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:child_process').then((m) => {
+                                    let deterministic = false;
+                                    try { m.exec('echo hi'); } catch (err) { deterministic = String(err?.message || '').includes('not implemented'); }
+                                    globalThis[key] = typeof m.spawn === 'function' && deterministic ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:cluster",
+                        profile: "Stub/Partial",
+                        notes: "Non-functional cluster orchestration APIs with deterministic failures.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_cluster_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:cluster').then((m) => {
+                                    let deterministic = false;
+                                    try { m.fork(); } catch (err) { deterministic = String(err?.message || '').includes('not implemented'); }
+                                    globalThis[key] = typeof m.isPrimary === 'boolean' && deterministic ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:console",
+                        profile: "Partial",
+                        notes: "Console module compatibility maps to runtime console implementation.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_console_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:console').then((m) => {
+                                    globalThis[key] = typeof m.default?.log === 'function' ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:diagnostics_channel",
+                        profile: "Partial",
+                        notes: "Basic publish/subscribe diagnostics channel surface.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_diag_channel_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:diagnostics_channel').then((m) => {
+                                    const ch = m.channel('edge');
+                                    let called = false;
+                                    const fn = () => { called = true; };
+                                    ch.subscribe(fn);
+                                    ch.publish({ ok: true });
+                                    ch.unsubscribe(fn);
+                                    globalThis[key] = called ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:dns",
+                        profile: "Stub/Partial",
+                        notes: "DNS module imports for compatibility while network resolution calls are not implemented.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_dns_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:dns').then((m) => {
+                                    let deterministic = false;
+                                    try { m.resolve('example.com'); } catch (err) { deterministic = String(err?.message || '').includes('not implemented'); }
+                                    globalThis[key] = typeof m.lookup === 'function' && deterministic ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:http",
+                        profile: "Stub/Partial",
+                                                notes: "HTTP client compatibility is provided as a wrapper around `fetch()`; server-side APIs remain non-functional.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_http_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:http').then((m) => {
+                                                                        const prev = globalThis.__edgeMockFetchHandler;
+                                                                        globalThis.__edgeMockFetchHandler = async () => new Response('http-ok', { status: 200 });
+                                                                        m.get('https://example.com', (res) => {
+                                                                            let body = '';
+                                                                            res.on('data', (chunk) => { body += String(chunk); });
+                                                                            res.on('end', () => {
+                                                                                globalThis.__edgeMockFetchHandler = prev;
+                                                                                globalThis[key] = Array.isArray(m.METHODS) && typeof m.request === 'function' && res.statusCode === 200 && body.includes('http-ok') ? 'partial' : 'none';
+                                                                            });
+                                                                            res.on('error', () => {
+                                                                                globalThis.__edgeMockFetchHandler = prev;
+                                                                                globalThis[key] = 'none';
+                                                                            });
+                                                                        }).on('error', () => {
+                                                                            globalThis.__edgeMockFetchHandler = prev;
+                                                                            globalThis[key] = 'none';
+                                                                        });
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:https",
+                        profile: "Stub/Partial",
+                                                notes: "HTTPS client compatibility is provided as a wrapper around `fetch()`; server-side APIs remain non-functional.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_https_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:https').then((m) => {
+                                                                        const prev = globalThis.__edgeMockFetchHandler;
+                                                                        globalThis.__edgeMockFetchHandler = async () => new Response('https-ok', { status: 200 });
+                                                                        m.request('https://example.com', { method: 'GET' }, (res) => {
+                                                                            let body = '';
+                                                                            res.on('data', (chunk) => { body += String(chunk); });
+                                                                            res.on('end', () => {
+                                                                                globalThis.__edgeMockFetchHandler = prev;
+                                                                                globalThis[key] = typeof m.request === 'function' && typeof m.get === 'function' && res.statusCode === 200 && body.includes('https-ok') ? 'partial' : 'none';
+                                                                            });
+                                                                            res.on('error', () => {
+                                                                                globalThis.__edgeMockFetchHandler = prev;
+                                                                                globalThis[key] = 'none';
+                                                                            });
+                                                                        }).on('error', () => {
+                                                                            globalThis.__edgeMockFetchHandler = prev;
+                                                                            globalThis[key] = 'none';
+                                                                        }).end();
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:http2",
+                        profile: "Stub/Partial",
+                        notes: "HTTP/2 compatibility surface for imports with deterministic non-functional operations.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_http2_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:http2').then((m) => {
+                                    globalThis[key] = typeof m.createServer === 'function' && typeof m.constants === 'object' ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:inspector",
+                        profile: "Stub/Partial",
+                        notes: "Inspector bridge compatibility surface with no-op/open stubs in this runtime profile.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_inspector_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:inspector').then((m) => {
+                                    globalThis[key] = typeof m.open === 'function' && typeof m.Session === 'function' ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:net",
+                        profile: "Stub/Partial",
+                        notes: "Network socket compatibility surface with deterministic non-functional connect/listen.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_net_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:net').then((m) => {
+                                    let deterministic = false;
+                                    try { m.connect(80, 'example.com'); } catch (err) { deterministic = String(err?.message || '').includes('not implemented'); }
+                                    globalThis[key] = typeof m.createServer === 'function' && deterministic ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:perf_hooks",
+                        profile: "Partial",
+                        notes: "Performance hooks compatibility based on runtime Performance APIs.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_perf_hooks_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:perf_hooks').then((m) => {
+                                    globalThis[key] = (typeof m.performance?.now === 'function' || typeof globalThis.performance?.now === 'function') ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:punycode",
+                        profile: "Partial",
+                        notes: "Punycode compatibility helpers for import-level ecosystem support.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_punycode_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:punycode').then((m) => {
+                                    const out = m.toASCII('example.com');
+                                    globalThis[key] = typeof out === 'string' ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:querystring",
+                        profile: "Partial",
+                        notes: "Querystring parse/stringify compatibility helpers.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_querystring_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:querystring').then((m) => {
+                                    const parsed = m.parse('a=1&b=2');
+                                    globalThis[key] = parsed.a === '1' && m.stringify({ a: 1 }) === 'a=1' ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:readline",
+                        profile: "Stub/Partial",
+                        notes: "Readline import-level compatibility with deterministic non-functional interactive APIs.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_readline_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:readline').then((m) => {
+                                    const i = m.createInterface({});
+                                    let deterministic = false;
+                                    try { i.question('x'); } catch (err) { deterministic = String(err?.message || '').includes('not implemented'); }
+                                    globalThis[key] = deterministic ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:repl",
+                        profile: "Stub/Partial",
+                        notes: "REPL compatibility entrypoint with deterministic non-functional behavior.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_repl_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:repl').then((m) => {
+                                    let deterministic = false;
+                                    try { m.start(); } catch (err) { deterministic = String(err?.message || '').includes('not implemented'); }
+                                    globalThis[key] = deterministic ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:sqlite",
+                        profile: "Not supported",
+                        notes: "Intentionally not exposed in this runtime profile to match Workers support boundary.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_sqlite_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:sqlite').then((_m) => {
+                                    globalThis[key] = 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'full';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:string_decoder",
+                        profile: "Partial",
+                        notes: "String decoder compatibility for common buffer decoding flows.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_string_decoder_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:string_decoder').then((m) => {
+                                    const d = new m.StringDecoder('utf-8');
+                                    globalThis[key] = d.end(new Uint8Array([65])) === 'A' ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:test",
+                        profile: "Not supported",
+                        notes: "Intentionally not exposed in this runtime profile to match Workers support boundary.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_test_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:test').then((_m) => {
+                                    globalThis[key] = 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'full';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:tls",
+                        profile: "Stub/Partial",
+                        notes: "TLS module compatibility entrypoints with deterministic non-functional operations.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_tls_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:tls').then((m) => {
+                                    globalThis[key] = Array.isArray(m.rootCertificates) && typeof m.connect === 'function' ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:dgram",
+                        profile: "Stub/Partial",
+                        notes: "UDP/datagram import compatibility with deterministic non-functional sockets.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_dgram_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:dgram').then((m) => {
+                                    let deterministic = false;
+                                    try { m.createSocket('udp4'); } catch (err) { deterministic = String(err?.message || '').includes('not implemented'); }
+                                    globalThis[key] = deterministic ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:v8",
+                        profile: "Stub/Partial",
+                        notes: "V8 compatibility introspection helpers with deterministic static values.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_v8_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:v8').then((m) => {
+                                    globalThis[key] = typeof m.cachedDataVersionTag === 'function' && typeof m.getHeapStatistics === 'function' ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:vm",
+                        profile: "Stub/Partial",
+                        notes: "VM import compatibility with deterministic non-functional script execution APIs.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_vm_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:vm').then((m) => {
+                                    let deterministic = false;
+                                    try { new m.Script('1+1').runInThisContext(); } catch (err) { deterministic = String(err?.message || '').includes('not implemented'); }
+                                    globalThis[key] = deterministic ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:zlib",
+                        profile: "Stub/Partial",
+                        notes: "Zlib import compatibility with deterministic non-functional compression operations.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_zlib_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:zlib').then((m) => {
+                                    let deterministic = false;
+                                    try { m.gzipSync('x'); } catch (err) { deterministic = String(err?.message || '').includes('not implemented'); }
+                                    globalThis[key] = typeof m.createGzip === 'function' && deterministic ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:assert",
+                        profile: "Partial",
+                        notes: "Assertion testing helpers compatible with common assert usage patterns.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_assert_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:assert').then((m) => {
+                                    let threw = false;
+                                    try { m.strictEqual(1, 2); } catch (_e) { threw = true; }
+                                    globalThis[key] = typeof m.ok === 'function' && threw ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:url",
+                        profile: "Partial",
+                        notes: "URL module compatibility with URL constructors, file URL helpers, and domain ASCII/Unicode helpers.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_url_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:url').then((m) => {
+                                    const p = m.fileURLToPath('file:///tmp/a.txt');
+                                    const u = m.pathToFileURL('/tmp/a.txt');
+                                    const a = m.domainToASCII('español.com');
+                                    const unicode = m.domainToUnicode('xn--espaol-zwa.com');
+                                    globalThis[key] = typeof m.URL === 'function' && p.endsWith('/tmp/a.txt') && u.protocol === 'file:' && typeof a === 'string' && typeof unicode === 'string' ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:timers",
+                        profile: "Partial",
+                        notes: "Timer module compatibility backed by runtime timer globals.",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_timers_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:timers').then((m) => {
+                                    globalThis[key] = typeof m.setTimeout === 'function' && typeof m.clearTimeout === 'function' ? 'partial' : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+                NodeCompatCheck {
+                        api: "node:timers/promises",
+                        profile: "Partial",
+                        notes: "Promise-based timers compatibility (`setTimeout`, `setImmediate`, `setInterval`).",
+                        js_check: r#"(() => {
+                            const key = '__edge_node_timers_promises_check';
+                            if (globalThis[key] === undefined) {
+                                globalThis[key] = 'pending';
+                                import('node:timers/promises').then((m) => {
+                                    globalThis[key] =
+                                      typeof m.setTimeout === 'function' &&
+                                      typeof m.setImmediate === 'function' &&
+                                      typeof m.setInterval === 'function'
+                                        ? 'partial'
+                                        : 'none';
+                                }).catch(() => {
+                                    globalThis[key] = 'none';
+                                });
+                                return 'pending';
+                            }
+                            return globalThis[key];
+                        })()"#,
+                        status: String::new(),
+                },
+        ]
+}
+
+fn status_label(status: &str) -> &'static str {
+        match status {
+                "full" => "Full",
+                "partial" => "Partial",
+                _ => "None",
+        }
+}
+
+fn node_support_tier(profile: &str, status: &str) -> &'static str {
+    if profile == "Not supported" {
+        return "⚪ Not supported";
+    }
+
+    // Any explicit stub profile remains partial by policy, even if import checks pass.
+    if profile.contains("Stub") {
+        return "🟡 Partial (stub/non-functional)";
+    }
+
+    // Non-stub partial profiles are treated as practical support for real-world usage.
+    if status == "partial" || status == "full" {
+        return "🟢 Supported (practical subset)";
+    }
+
+    "🟡 Partial (validation gap)"
 }
 
 fn define_checks() -> Vec<ApiCheck> {
@@ -584,11 +1466,19 @@ fn define_checks() -> Vec<ApiCheck> {
 fn generate_web_standards_report() {
     let mut runtime = make_runtime();
     let mut checks = define_checks();
+    let mut node_checks = define_node_compat_checks();
 
     // Run all checks
     for check in checks.iter_mut() {
         check.status = eval_js(&mut runtime, check.js_check);
         // Normalize unexpected values
+        if !["full", "partial", "none"].contains(&check.status.as_str()) {
+            check.status = "none".to_string();
+        }
+    }
+
+    for check in node_checks.iter_mut() {
+        check.status = eval_js(&mut runtime, check.js_check);
         if !["full", "partial", "none"].contains(&check.status.as_str()) {
             check.status = "none".to_string();
         }
@@ -694,13 +1584,13 @@ fn generate_web_standards_report() {
     writeln!(report, "The following Deno extensions are loaded:").unwrap();
     writeln!(report).unwrap();
     writeln!(report, "- `deno_webidl` - WebIDL bindings").unwrap();
-    writeln!(report, "- `deno_console` - Console API").unwrap();
-    writeln!(report, "- `deno_url` - URL / URLSearchParams / URLPattern").unwrap();
     writeln!(
         report,
-        "- `deno_web` - Web APIs (Events, Timers, Streams, Encoding, Blob, File, etc.)"
+        "- `deno_web` - Web APIs (Console, URL, Events, Timers, Streams, Encoding, Blob, File, etc.)"
     )
     .unwrap();
+    writeln!(report, "- `deno_io` - IO primitives for runtime internals").unwrap();
+    writeln!(report, "- `deno_fs` - Filesystem extension (sandboxed by permissions)").unwrap();
     writeln!(report, "- `deno_crypto` - Web Crypto API").unwrap();
     writeln!(report, "- `deno_telemetry` - OpenTelemetry support").unwrap();
     writeln!(
@@ -710,6 +1600,8 @@ fn generate_web_standards_report() {
     .unwrap();
     writeln!(report, "- `deno_net` - TCP/TLS networking").unwrap();
     writeln!(report, "- `deno_tls` - TLS support").unwrap();
+    writeln!(report, "- `edge_node_compat` - Node.js compatibility layer (partial/stub node:*)").unwrap();
+    writeln!(report, "- `deno_node` - Minimal node shim required by runtime deps").unwrap();
     writeln!(
         report,
         "- `edge_bootstrap` - Bootstrap module that wires everything to globalThis"
@@ -720,6 +1612,32 @@ fn generate_web_standards_report() {
         "- `edge_assert` - Optional test helpers extension (loaded only in CLI test mode)"
     )
     .unwrap();
+    writeln!(report).unwrap();
+
+    // Node compatibility section (explicitly separated from Web Standards checks).
+    writeln!(report, "## Node API Compatibility").unwrap();
+    writeln!(report).unwrap();
+    writeln!(report, "This section is validated by runtime checks and is separate from Web Standards scoring.").unwrap();
+    writeln!(report, "Node APIs are grouped by runtime support tier to mirror a Cloudflare-style compatibility message.").unwrap();
+    writeln!(report, "- `🟢 Supported (practical subset)`: non-stub APIs with behavior suitable for common real usage.").unwrap();
+    writeln!(report, "- `🟡 Partial (stub/non-functional)`: import/surface compatibility where core behavior is intentionally stubbed.").unwrap();
+    writeln!(report, "- `⚪ Not supported`: intentionally not exposed in this runtime profile.").unwrap();
+    writeln!(report, "Unsupported privileged behavior fails with deterministic errors (for example `EOPNOTSUPP`) instead of panicking or exposing host resources.").unwrap();
+    writeln!(report).unwrap();
+    writeln!(report, "| Module | Runtime Support | Profile | Tested Status | Notes |",).unwrap();
+    writeln!(report, "|--------|-----------------|---------|---------------|-------|",).unwrap();
+    for check in &node_checks {
+        writeln!(
+            report,
+            "| `{}` | {} | {} | {} | {} |",
+            check.api,
+            node_support_tier(check.profile, &check.status),
+            check.profile,
+            status_label(&check.status),
+            check.notes
+        )
+        .unwrap();
+    }
     writeln!(report).unwrap();
 
     // write to file
