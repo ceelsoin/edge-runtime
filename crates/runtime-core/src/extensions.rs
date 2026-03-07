@@ -135,6 +135,7 @@ fn op_edge_runtime_console_log(
         push_collected_log(IsolateConsoleLog {
             timestamp: chrono::Utc::now(),
             function_name: config.function_name,
+            request_id: "isolate-console".to_string(),
             level,
             message,
         });

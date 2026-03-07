@@ -59,6 +59,50 @@ deno-edge-runtime [GLOBAL_OPTIONS] <COMMAND> [COMMAND_OPTIONS]
   - Default: `pretty`
   - Env: `EDGE_RUNTIME_LOG_FORMAT`
   - `watch` keeps the same default (`pretty`) unless overridden.
+- `--otel-enabled`
+  - Enable OpenTelemetry export for traces/metrics/logs.
+  - Default: `false`
+  - Env: `EDGE_RUNTIME_OTEL_ENABLED`
+- `--otel-protocol <http-protobuf>`
+  - OTLP transport protocol (currently HTTP protobuf).
+  - Default: `http-protobuf`
+  - Env: `EDGE_RUNTIME_OTEL_PROTOCOL`
+- `--otel-endpoint <URL>`
+  - OTLP collector base endpoint.
+  - Default: `http://127.0.0.1:4318`
+  - Env: `EDGE_RUNTIME_OTEL_ENDPOINT`
+- `--otel-service-name <NAME>`
+  - OTEL resource `service.name`.
+  - Default: `deno-edge-runtime`
+  - Env: `EDGE_RUNTIME_OTEL_SERVICE_NAME`
+- `--otel-export-interval-ms <MS>`
+  - Periodic export interval for OTEL batch readers.
+  - Default: `5000`
+  - Env: `EDGE_RUNTIME_OTEL_EXPORT_INTERVAL_MS`
+- `--otel-export-timeout-ms <MS>`
+  - OTEL export timeout.
+  - Default: `10000`
+  - Env: `EDGE_RUNTIME_OTEL_EXPORT_TIMEOUT_MS`
+- `--otel-enable-traces`
+  - Enable OTEL trace signal export.
+  - Default: `true`
+  - Env: `EDGE_RUNTIME_OTEL_ENABLE_TRACES`
+- `--otel-enable-metrics`
+  - Enable OTEL metrics signal export.
+  - Default: `true`
+  - Env: `EDGE_RUNTIME_OTEL_ENABLE_METRICS`
+- `--otel-enable-logs`
+  - Enable OTEL logs signal export.
+  - Default: `true`
+  - Env: `EDGE_RUNTIME_OTEL_ENABLE_LOGS`
+- `--otel-export-isolate-logs`
+  - Export isolate collector logs to OTEL logs signal.
+  - Default: `true`
+  - Env: `EDGE_RUNTIME_OTEL_EXPORT_ISOLATE_LOGS`
+- `--otel-isolate-log-batch-size <COUNT>`
+  - Max isolate logs exported per OTEL drain tick.
+  - Default: `256`
+  - Env: `EDGE_RUNTIME_OTEL_ISOLATE_LOG_BATCH_SIZE`
 
 ### Subcommands
 
@@ -109,6 +153,17 @@ These are consumed mainly by `start` and `watch`:
 - `EDGE_RUNTIME_SOURCE_MAP`
 - `EDGE_RUNTIME_LOG_FORMAT`
 - `EDGE_RUNTIME_PRINT_ISOLATE_LOGS`
+- `EDGE_RUNTIME_OTEL_ENABLED`
+- `EDGE_RUNTIME_OTEL_PROTOCOL`
+- `EDGE_RUNTIME_OTEL_ENDPOINT`
+- `EDGE_RUNTIME_OTEL_SERVICE_NAME`
+- `EDGE_RUNTIME_OTEL_EXPORT_INTERVAL_MS`
+- `EDGE_RUNTIME_OTEL_EXPORT_TIMEOUT_MS`
+- `EDGE_RUNTIME_OTEL_ENABLE_TRACES`
+- `EDGE_RUNTIME_OTEL_ENABLE_METRICS`
+- `EDGE_RUNTIME_OTEL_ENABLE_LOGS`
+- `EDGE_RUNTIME_OTEL_EXPORT_ISOLATE_LOGS`
+- `EDGE_RUNTIME_OTEL_ISOLATE_LOG_BATCH_SIZE`
 
 ## Command Reference
 
@@ -447,6 +502,8 @@ deno-edge-runtime start \
 - **SSRF Protection**: Enabled by default, blocking `fetch()` to private IPs. Use `--allow-private-net` for exceptions.
 - **Body Limits**: Request/response bodies exceeding limits are rejected to prevent memory exhaustion.
 - **Connection Limits**: Connections exceeding the limit are dropped to prevent resource exhaustion.
+- **OpenTelemetry**: when `--otel-enabled` is set, the runtime exports traces, metrics and logs via OTLP HTTP (`/v1/traces`, `/v1/metrics`, `/v1/logs`).
+- **Isolate Logs to OTEL**: isolate collector export requires `--print-isolate-logs=false`; otherwise logs go to stdout and collector remains empty.
 
 ### TLS Configuration
 

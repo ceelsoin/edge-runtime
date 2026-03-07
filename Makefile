@@ -3,6 +3,9 @@ build:
 run:
 	cargo run start 2>&1
 
+watch:
+	cargo run watch --path ./examples/hello/hello.ts --inspect 9229
+
 test-js:
 	cargo run -- test --path "./tests/js/**/*.ts" --ignore "./tests/js/lib/**" 2>&1
 

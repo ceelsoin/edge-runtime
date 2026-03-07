@@ -11,7 +11,7 @@ use bytes::Bytes;
 use http::{Request, Response, StatusCode};
 use http_body_util::{BodyExt, Full, StreamBody};
 use runtime_core::isolate::IsolateResponseBody;
-use tracing::info;
+use tracing::{info, info_span};
 
 use crate::service::BoxBody;
 use functions::registry::FunctionRegistry;
@@ -92,6 +92,7 @@ impl IngressRouter {
         trace_ctx: &crate::trace_context::TraceContext,
     ) -> Response<BoxBody> {
         let path = req.uri().path().to_string();
+        let method = req.method().clone();
 
         // Extract function name from first path segment
         let segments: Vec<&str> = path.splitn(3, '/').collect();
@@ -111,6 +112,16 @@ impl IngressRouter {
                 r#"{"error":"invalid function name"}"#,
             );
         }
+
+        let request_span = info_span!(
+            "http.request",
+            component = "ingress",
+            function_name = %function_name,
+            request_id = %trace_ctx.trace_id,
+            method = %method,
+            path = %path
+        );
+        let _request_span_guard = request_span.enter();
 
         // Get isolate handle
         let Some(handle) = self.registry.get_handle(function_name) else {

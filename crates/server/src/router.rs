@@ -9,7 +9,7 @@ use http::{Method, Request, Response, StatusCode};
 use http_body_util::{BodyExt, Full, StreamBody};
 use runtime_core::isolate::IsolateResponseBody;
 use tokio::sync::RwLock;
-use tracing::{error, info};
+use tracing::{error, info, info_span};
 use uuid::Uuid;
 
 use crate::service::BoxBody;
@@ -257,6 +257,7 @@ impl Router {
         }
 
         let path = req.uri().path().to_string();
+        let method = req.method().clone();
 
         // Extract function name from first path segment
         let segments: Vec<&str> = path.splitn(3, '/').collect();
@@ -276,6 +277,16 @@ impl Router {
                 r#"{"error":"invalid function name; use lowercase slug [a-z0-9-], max 63 chars"}"#,
             );
         }
+
+        let request_span = info_span!(
+            "http.request",
+            component = "ingress",
+            function_name = %function_name,
+            request_id = %trace_ctx.trace_id,
+            method = %method,
+            path = %path
+        );
+        let _request_span_guard = request_span.enter();
 
         // Get isolate handle
         let Some(handle) = self.registry.get_handle(function_name) else {

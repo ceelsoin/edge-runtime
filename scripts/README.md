@@ -18,6 +18,7 @@ This directory contains scripts for bundling, deploying, and load-testing the De
 ### Automation Scripts
 - **`run-benchmarks.sh`** - Full end-to-end benchmark (build, bundle, deploy, test everything)
 - **`quick-benchmark.sh`** - Fast re-run of benchmarks without rebuilding
+- **`start-observability-runtime.sh`** - Start observability docker stack + run edge runtime with OTEL + open Grafana
 
 ## Prerequisites
 
@@ -56,6 +57,38 @@ This will:
 
 ```bash
 ./scripts/quick-benchmark.sh
+```
+
+### Start Observability + Runtime (OTEL)
+
+```bash
+./scripts/start-observability-runtime.sh
+```
+
+Open all observability UIs:
+
+```bash
+./scripts/start-observability-runtime.sh --all
+```
+
+This will:
+1. Start `observability/docker-compose.yml`
+2. Run `cargo run -- start --print-isolate-logs false` with OTEL env vars set
+3. Wait for readiness checks (`Grafana` and runtime `/_internal/health`)
+4. Open Grafana (`http://localhost:3000`) in your browser
+
+With `--all`, it also opens:
+- VictoriaMetrics UI (`http://localhost:8428/vmui`)
+- Prometheus (`http://localhost:9090`)
+- Tempo (`http://localhost:3200`)
+- Loki (`http://localhost:3100`)
+
+You can override OTEL vars before running, for example:
+
+```bash
+EDGE_RUNTIME_OTEL_SERVICE_NAME=my-local-runtime \
+EDGE_RUNTIME_OTEL_ENDPOINT=http://127.0.0.1:4318 \
+./scripts/start-observability-runtime.sh
 ```
 
 ### Individual Steps

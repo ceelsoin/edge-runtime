@@ -233,6 +233,11 @@ pub fn run(args: WatchArgs) -> Result<(), anyhow::Error> {
             default_config.clone(),
         ));
 
+        crate::telemetry::spawn_isolate_log_exporter(
+            shutdown.clone(),
+            args.print_isolate_logs,
+        );
+
         // Spawn signal handler for graceful shutdown
         let shutdown_signal = shutdown.clone();
         tokio::spawn(edge_server::graceful::wait_for_shutdown_signal(shutdown_signal));

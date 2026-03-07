@@ -10,6 +10,8 @@ use bytes::Bytes;
 use http::header::HeaderMap;
 use http::{Method, Request, Response, StatusCode};
 use http_body_util::{BodyExt, Full};
+use tracing::info_span;
+use uuid::Uuid;
 
 use functions::registry::FunctionRegistry;
 
@@ -127,13 +129,23 @@ impl AdminRouter {
         &self,
         req: Request<hyper::body::Incoming>,
     ) -> Result<Response<BoxBody>, Infallible> {
+        let path = req.uri().path().to_string();
+        let method = req.method().clone();
+        let request_id = Uuid::new_v4().simple().to_string();
+        let request_span = info_span!(
+            "http.request",
+            component = "admin",
+            function_name = "admin",
+            request_id = %request_id,
+            method = %method,
+            path = %path
+        );
+        let _request_span_guard = request_span.enter();
+
         // Check authentication
         if let Err(resp) = self.check_auth(&req) {
             return Ok(resp);
         }
-
-        let path = req.uri().path().to_string();
-        let method = req.method().clone();
 
         Ok(self.route_internal(req, &path, method).await)
     }

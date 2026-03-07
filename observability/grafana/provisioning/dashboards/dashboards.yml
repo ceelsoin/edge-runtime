@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: edge-runtime-observability
+    orgId: 1
+    folder: Edge Runtime
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /etc/grafana/provisioning/dashboards/files

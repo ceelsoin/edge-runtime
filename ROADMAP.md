@@ -449,9 +449,11 @@ Implementacao atual:
 - [x] Manter formato default `pretty` (incluindo `watch`)
 - [x] Enriquecer logs internos com `function_name` e `request_id` onde aplicável
 - [x] Tornar saída de logs `console.*` de isolate configurável (`--print-isolate-logs`)
-- [ ] Expor coletor interno de logs de isolate para stack externa por função (API/integração)
+- [x] Expor coletor interno de logs de isolate para stack externa via OTLP (collector)
+- [x] Exportar tracing HTTP request spans para OTLP
+- [x] Exportar métricas de exportação de logs de isolate para OTLP
 
-**Status:** Parcial (integracao externa pendente)
+**Status:** Concluido
 
 ---
 

@@ -1,4 +1,5 @@
 mod commands;
+mod telemetry;
 
 use clap::{Parser, Subcommand};
 
@@ -6,6 +7,15 @@ use clap::{Parser, Subcommand};
 enum LogFormat {
     Pretty,
     Json,
+}
+
+impl From<LogFormat> for telemetry::RuntimeLogFormat {
+    fn from(value: LogFormat) -> Self {
+        match value {
+            LogFormat::Pretty => telemetry::RuntimeLogFormat::Pretty,
+            LogFormat::Json => telemetry::RuntimeLogFormat::Json,
+        }
+    }
 }
 
 #[derive(Parser)]
@@ -31,6 +41,9 @@ struct Cli {
         env = "EDGE_RUNTIME_LOG_FORMAT"
     )]
     log_format: LogFormat,
+
+    #[command(flatten)]
+    telemetry: telemetry::TelemetryArgs,
 }
 
 #[derive(Subcommand)]
@@ -53,33 +66,19 @@ fn main() -> Result<(), anyhow::Error> {
     // Required by deno_fetch/deno_net TLS operations (e.g. EventSource over HTTPS).
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    // Initialize tracing
-    let env_filter = if cli.verbose { "debug" } else { "info" };
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(env_filter));
-
-    match cli.log_format {
-        LogFormat::Pretty => {
-            tracing_subscriber::fmt().with_env_filter(env_filter).init();
-        }
-        LogFormat::Json => {
-            tracing_subscriber::fmt()
-                .json()
-                .with_current_span(true)
-                .with_span_list(false)
-                .with_env_filter(env_filter)
-                .init();
-        }
-    }
+    telemetry::init(cli.verbose, cli.log_format.into(), &cli.telemetry)?;
 
     // Initialize V8 platform (must be done on main thread, before any JsRuntime)
     deno_core::JsRuntime::init_platform(None);
 
-    match cli.command {
+    let result = match cli.command {
         Commands::Start(args) => commands::start::run(args),
         Commands::Bundle(args) => commands::bundle::run(args),
         Commands::Watch(args) => commands::watch::run(args),
         Commands::Test(args) => commands::test::run(args),
         Commands::Check(args) => commands::check::run(args),
-    }
+    };
+
+    telemetry::shutdown();
+    result
 }

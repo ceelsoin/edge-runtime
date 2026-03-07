@@ -73,8 +73,8 @@ tokio-rustls = { version = "0.26.0", default-features = false, features = ["ring
 
 # --- observability ---
 opentelemetry = "0.27.0"
-opentelemetry-otlp = { version = "0.27.0", features = ["logs", "http-proto"] }
-opentelemetry_sdk = "0.27.0"
+opentelemetry-otlp = { version = "0.27.0", default-features = false, features = ["trace", "metrics", "logs", "http-proto", "reqwest-client"] }
+opentelemetry_sdk = { version = "0.27.0", features = ["rt-tokio"] }
 opentelemetry-semantic-conventions = { version = "0.27.0", features = ["semconv_experimental"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "tracing-log", "json"] }

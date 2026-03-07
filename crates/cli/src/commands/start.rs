@@ -241,6 +241,11 @@ pub fn run(args: StartArgs) -> Result<(), anyhow::Error> {
             PoolLimits::default(),
         ));
 
+        crate::telemetry::spawn_isolate_log_exporter(
+            shutdown.clone(),
+            args.print_isolate_logs,
+        );
+
         // Spawn signal handler
         let shutdown_signal = shutdown.clone();
         tokio::spawn(edge_server::graceful::wait_for_shutdown_signal(
