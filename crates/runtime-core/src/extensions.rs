@@ -11,10 +11,12 @@ use deno_core::{op2, Extension, ModuleCodeString, ModuleName, OpState, RuntimeOp
 use flate2::read::{DeflateDecoder, GzDecoder, ZlibDecoder};
 use flate2::write::{DeflateEncoder, GzEncoder, ZlibEncoder};
 use flate2::Compression;
+use hmac::{Hmac, Mac};
 use node_resolver::errors::{
     PackageFolderResolveError, PackageFolderResolveErrorKind, PackageNotFoundError,
 };
 use node_resolver::{InNpmPackageChecker, NpmPackageFolderResolver, UrlOrPathRef};
+use sha2::{Digest, Sha256, Sha512};
 use tracing::{error, info, warn};
 
 use crate::isolate_logs::{push_collected_log, IsolateConsoleLog, IsolateLogConfig};
@@ -31,48 +33,24 @@ deno_core::extension!(
 );
 
 // Minimal Node built-ins for compatibility with SSR/tooling ecosystems.
+// Only register critical modules here to avoid V8 string size limits (2^29 - 24 bytes).
 deno_core::extension!(
     edge_node_compat,
-    ops = [op_edge_zlib_transform],
+    ops = [
+        op_edge_zlib_transform,
+        op_edge_crypto_hash,
+        op_edge_crypto_hmac,
+    ],
     esm = [
-        dir "src/node_compat",
-        "node:process" = "process.ts",
-        "node:assert" = "assert.ts",
-        "node:async_hooks" = "async_hooks.ts",
-        "node:child_process" = "child_process.ts",
-        "node:cluster" = "cluster.ts",
-        "node:console" = "console.ts",
-        "node:diagnostics_channel" = "diagnostics_channel.ts",
-        "node:dgram" = "dgram.ts",
-        "node:dns" = "dns.ts",
-        "node:buffer" = "buffer.ts",
-        "node:events" = "events.ts",
-        "node:util" = "util.ts",
-        "node:path" = "path.ts",
-        "node:url" = "url.ts",
-        "node:querystring" = "querystring.ts",
-        "node:punycode" = "punycode.ts",
-        "node:stream" = "stream.ts",
-        "node:string_decoder" = "string_decoder.ts",
-        "node:os" = "os.ts",
-        "node:net" = "net.ts",
-        "node:http" = "http.ts",
-        "node:https" = "https.ts",
-        "node:http2" = "http2.ts",
-        "node:tls" = "tls.ts",
-        "node:perf_hooks" = "perf_hooks.ts",
-        "node:inspector" = "inspector.ts",
-        "node:readline" = "readline.ts",
-        "node:repl" = "repl.ts",
-        "node:v8" = "v8.ts",
-        "node:vm" = "vm.ts",
-        "node:zlib" = "zlib.ts",
-        "node:timers" = "timers.ts",
-        "node:timers/promises" = "timers_promises.ts",
-        "node:module" = "module.ts",
-        "node:request" = "request.ts",
-        "node:fs" = "fs.ts",
-        "node:fs/promises" = "fs_promises.ts",
+        "node:process" = "src/node_compat/process.ts",
+        "node:buffer" = "src/node_compat/buffer.ts",
+        "node:crypto" = "src/node_compat/crypto.ts",
+        "node:events" = "src/node_compat/events.ts",
+        "node:stream" = "src/node_compat/stream.ts",
+        "node:async_hooks" = "src/node_compat/async_hooks.ts",
+        "node:util" = "src/node_compat/util.ts",
+        "node:path" = "src/node_compat/path.ts",
+        "node:url" = "src/node_compat/url.ts",
     ],
 );
 
@@ -260,6 +238,61 @@ fn op_edge_zlib_transform(
         "decompress" => decompress_with_limit(&format, input, max_output_length, operation_timeout),
         _ => Err(deno_error::JsErrorBox::generic(format!(
             "unsupported zlib mode: {mode}",
+        ))),
+    }
+}
+
+// ============ Crypto Native Operations ============
+
+/// Native synchronous hash operation using sha2/sha512
+#[op2]
+#[buffer]
+pub fn op_edge_crypto_hash(
+    #[string] algorithm: String,
+    #[buffer] data: &[u8],
+) -> Result<Vec<u8>, deno_error::JsErrorBox> {
+    match algorithm.as_str() {
+        "SHA-256" => {
+            let mut hasher = Sha256::new();
+            hasher.update(data);
+            Ok(hasher.finalize().to_vec())
+        }
+        "SHA-512" => {
+            let mut hasher = Sha512::new();
+            hasher.update(data);
+            Ok(hasher.finalize().to_vec())
+        }
+        algo => Err(deno_error::JsErrorBox::generic(format!(
+            "unsupported hash algorithm: {algo}"
+        ))),
+    }
+}
+
+/// Native synchronous HMAC operation
+#[op2]
+#[buffer]
+pub fn op_edge_crypto_hmac(
+    #[string] algorithm: String,
+    #[buffer] key: &[u8],
+    #[buffer] data: &[u8],
+) -> Result<Vec<u8>, deno_error::JsErrorBox> {
+    match algorithm.as_str() {
+        "SHA-256" => {
+            type HmacSha256 = Hmac<Sha256>;
+            let mut mac = HmacSha256::new_from_slice(key)
+                .map_err(|_| deno_error::JsErrorBox::generic("invalid HMAC key length"))?;
+            mac.update(data);
+            Ok(mac.finalize().into_bytes().to_vec())
+        }
+        "SHA-512" => {
+            type HmacSha512 = Hmac<Sha512>;
+            let mut mac = HmacSha512::new_from_slice(key)
+                .map_err(|_| deno_error::JsErrorBox::generic("invalid HMAC key length"))?;
+            mac.update(data);
+            Ok(mac.finalize().into_bytes().to_vec())
+        }
+        algo => Err(deno_error::JsErrorBox::generic(format!(
+            "unsupported HMAC algorithm: {algo}"
         ))),
     }
 }
@@ -477,7 +510,7 @@ pub fn get_extensions_with_edge_assert(include_edge_assert: bool) -> Vec<Extensi
         deno_telemetry::deno_telemetry::init(),
         // 8. Fetch (depends on web, net, tls) - fetch API
         deno_fetch::deno_fetch::init(deno_fetch::Options::default()),
-        // 9. Minimal Node compatibility modules (node:process, node:buffer)
+        // 9. Minimal Node compatibility modules with native crypto ops
         edge_node_compat::init(),
         // 9. Node shim - provides minimal constants for deno_crypto
         deno_node::init(),

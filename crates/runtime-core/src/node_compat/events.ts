@@ -1,5 +1,47 @@
+import { AsyncLocalStorage, alsRegistry } from "node:async_hooks";
+
+// Registry to capture AsyncLocalStorage instances (shared with async_hooks)
+const alsRegistry = new WeakSet<AsyncLocalStorage<unknown>>();
+
+// Store to track listener contexts
+const listenerToContext = new WeakMap<
+  (... args: unknown[]) => void,
+  Map<AsyncLocalStorage<unknown>, unknown>
+>();
+
+/**
+ * Captures current ALS context snapshot
+ */
+function captureAlsContext(): Map<AsyncLocalStorage<unknown>, unknown> {
+  const context = new Map<AsyncLocalStorage<unknown>, unknown>();
+
+  // Iterate through all AsyncLocalStorage instances
+  // Note: This requires careful handling since AsyncLocalStorage uses private fields
+  // We read the __store and __enabled directly (they're marked as such in async_hooks.ts)
+  for (const als of alsRegistry) {
+    if ((als as any).__enabled) {
+      context.set(als, (als as any).__store);
+    }
+  }
+
+  return context;
+}
+
+/**
+ * Restores ALS context from snapshot
+ */
+function restoreAlsContext(context: Map<AsyncLocalStorage<unknown>, unknown>): void {
+  // Restore each ALS instance to its captured value
+  for (const [als, value] of context) {
+    (als as any).__store = value;
+  }
+}
+
 class EventEmitter {
-  #events = new Map();
+  #events = new Map<
+    string | symbol,
+    Array<{ fn: (...args: unknown[]) => void; context: Map<AsyncLocalStorage<unknown>, unknown> }>
+  >();
   #maxListeners = 10;
 
   setMaxListeners(n: number) {
@@ -15,8 +57,20 @@ class EventEmitter {
     const listeners = this.#events.get(eventName);
     if (!listeners || listeners.length === 0) return false;
 
-    for (const listener of [...listeners]) {
-      listener.apply(this, args);
+    for (const { fn, context: savedContext } of listeners) {
+      // Save current ALS state
+      const currentContext = captureAlsContext();
+
+      try {
+        // Restore the context from when listener was registered
+        restoreAlsContext(savedContext);
+
+        // Execute the listener
+        fn.apply(this, args);
+      } finally {
+        // Restore the previous context
+        restoreAlsContext(currentContext);
+      }
     }
     return true;
   }
@@ -26,8 +80,16 @@ class EventEmitter {
       throw new TypeError("listener must be a function");
     }
 
+    // Register the AsyncLocalStorage instance if it's new
+    for (const als of alsRegistry) {
+      // Registry is set up in async_hooks module
+    }
+
+    // Capture ALS context at registration time
+    const context = captureAlsContext();
+
     const listeners = this.#events.get(eventName) ?? [];
-    listeners.push(listener);
+    listeners.push({ fn: listener, context });
     this.#events.set(eventName, listeners);
     return this;
   }
@@ -41,8 +103,10 @@ class EventEmitter {
       throw new TypeError("listener must be a function");
     }
 
+    const context = captureAlsContext();
+
     const listeners = this.#events.get(eventName) ?? [];
-    listeners.unshift(listener);
+    listeners.unshift({ fn: listener, context });
     this.#events.set(eventName, listeners);
     return this;
   }
@@ -52,12 +116,17 @@ class EventEmitter {
       throw new TypeError("listener must be a function");
     }
 
+    const context = captureAlsContext();
+
     const wrapped = (...args: unknown[]) => {
       this.removeListener(eventName, wrapped);
       listener.apply(this, args);
     };
 
-    return this.addListener(eventName, wrapped);
+    const listeners = this.#events.get(eventName) ?? [];
+    listeners.push({ fn: wrapped, context });
+    this.#events.set(eventName, listeners);
+    return this;
   }
 
   off(eventName: string | symbol, listener: (...args: unknown[]) => void) {
@@ -68,7 +137,7 @@ class EventEmitter {
     const listeners = this.#events.get(eventName);
     if (!listeners || listeners.length === 0) return this;
 
-    const next = listeners.filter((fn) => fn !== listener);
+    const next = listeners.filter(({ fn }) => fn !== listener);
     if (next.length > 0) {
       this.#events.set(eventName, next);
     } else {
@@ -92,7 +161,7 @@ class EventEmitter {
   }
 
   listeners(eventName: string | symbol) {
-    return [...(this.#events.get(eventName) ?? [])];
+    return (this.#events.get(eventName) ?? []).map(({ fn }) => fn);
   }
 
   eventNames() {

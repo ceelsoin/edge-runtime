@@ -117,6 +117,10 @@ jsonschema = "0.29"
 ipnet = "2.10"
 flate2 = "1.0"
 
+# --- cryptography ---
+sha2 = "0.10"
+hmac = "0.12"
+
 [profile.release]
 debug = true
 lto = "thin"

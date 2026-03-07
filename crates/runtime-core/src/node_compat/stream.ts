@@ -8,9 +8,13 @@ class Readable extends Stream {
   readable = true;
   destroyed = false;
   readableEnded = false;
+  #paused = false;
+  #buffer: unknown[] = [];
+  #highWaterMark: number;
 
-  constructor(_options: Record<string, unknown> = {}) {
+  constructor(options: Record<string, unknown> = {}) {
     super();
+    this.#highWaterMark = (options.highWaterMark as number) || 16384;
   }
 
   static from(iterable: Iterable<unknown> | AsyncIterable<unknown>) {
@@ -44,22 +48,67 @@ class Readable extends Stream {
       return false;
     }
 
+    // If paused or buffer is full, queue the chunk
+    if (this.#paused || this.#buffer.length >= this.#highWaterMark) {
+      this.#buffer.push(chunk);
+      return false; // Signal backpressure
+    }
+
+    // Emit data immediately if not paused and buffer is not full
     this.emit("data", chunk);
-    return true;
+
+    // If buffer has accumulated data, it means we hit highWaterMark on previous call
+    // Return false to signal backpressure
+    return this.#buffer.length === 0;
+  }
+
+  pause() {
+    this.#paused = true;
+    this.emit("pause");
+    return this;
+  }
+
+  resume() {
+    this.#paused = false;
+    this.emit("resume");
+
+    // Flush internal buffer while not paused
+    while (!this.#paused && this.#buffer.length > 0) {
+      const chunk = this.#buffer.shift();
+      if (chunk === null) {
+        this.readableEnded = true;
+        this.emit("end");
+        this.emit("close");
+        break;
+      } else {
+        this.emit("data", chunk);
+      }
+    }
+
+    return this;
   }
 
   pipe(destination: Writable | Transform | Duplex) {
-    this.on("data", (chunk: unknown) => {
-      destination.write(chunk);
-    });
+    const onData = (chunk: unknown) => {
+      const canContinue = destination.write(chunk);
+      if (!canContinue) {
+        this.pause();
+      }
+    };
 
+    const onDrain = () => {
+      this.resume();
+    };
+
+    this.on("data", onData);
     this.on("end", () => {
       destination.end();
     });
-
     this.on("error", (err: unknown) => {
       destination.emit("error", err);
     });
+
+    destination.on("drain", onDrain);
 
     return destination;
   }
@@ -79,12 +128,16 @@ class Writable extends Stream {
   destroyed = false;
   writableEnded = false;
   #writeImpl?: (chunk: unknown, encoding: string, cb: Callback) => void;
+  #buffer: unknown[] = [];
+  #highWaterMark: number;
+  #writing = false;
 
   constructor(options: Record<string, unknown> = {}) {
     super();
     this.#writeImpl = options.write as
       | ((chunk: unknown, encoding: string, cb: Callback) => void)
       | undefined;
+    this.#highWaterMark = (options.highWaterMark as number) || 16384;
   }
 
   write(chunk: unknown, encodingOrCb?: string | Callback, maybeCb?: Callback) {
@@ -93,14 +146,43 @@ class Writable extends Stream {
     const encoding = typeof encodingOrCb === "string" ? encodingOrCb : "utf8";
     const cb = (typeof encodingOrCb === "function" ? encodingOrCb : maybeCb) ?? (() => {});
 
-    if (this.#writeImpl) {
-      this.#writeImpl(chunk, encoding, cb);
-    } else {
+    const done = () => {
       cb();
+      this.#writing = false;
+
+      // Flush buffer if there's more data
+      if (this.#buffer.length > 0) {
+        const nextChunk = this.#buffer.shift();
+        const nextEncoding = typeof nextChunk === 'object' && nextChunk !== null && 'encoding' in nextChunk
+          ? (nextChunk as any).encoding
+          : 'utf8';
+        const nextData = typeof nextChunk === 'object' && nextChunk !== null && 'data' in nextChunk
+          ? (nextChunk as any).data
+          : nextChunk;
+        this.write(nextData, nextEncoding);
+      }
+
+      // Emit drain when buffer is flushed
+      if (this.#buffer.length === 0) {
+        queueMicrotask(() => this.emit("drain"));
+      }
+    };
+
+    // If already writing, buffer the chunk
+    if (this.#writing || this.#buffer.length > 0) {
+      this.#buffer.push(chunk);
+      return this.#buffer.length < this.#highWaterMark;
     }
 
-    this.emit("drain");
-    return true;
+    this.#writing = true;
+
+    if (this.#writeImpl) {
+      this.#writeImpl(chunk, encoding, done);
+    } else {
+      done();
+    }
+
+    return this.#buffer.length === 0;
   }
 
   end(chunkOrCb?: unknown, encodingOrCb?: string | Callback, maybeCb?: Callback) {

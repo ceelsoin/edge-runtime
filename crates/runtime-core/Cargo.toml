@@ -52,6 +52,8 @@ jsonschema.workspace = true
 ipnet.workspace = true
 chrono.workspace = true
 flate2.workspace = true
+sha2.workspace = true
+hmac.workspace = true
 
 [dev-dependencies]
 deno_graph.workspace = true

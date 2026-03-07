@@ -714,17 +714,7 @@ Status aplicado desta trilha: etapas A/B/C/D concluídas em perfil `Full/Partial
 
 ### 5.12 Flags de Compatibilidade de Runtime
 
-**Objetivo:** permitir evolução incremental sem quebrar workloads existentes.
-
-- [ ] Adicionar flag de runtime para compat Node (ex.: `--node-compat`)
-- [ ] Adicionar variante mínima para contexto assíncrono (ex.: `--node-als`)
-- [ ] Definir defaults por modo:
-    - [ ] `start` produção: perfil conservador
-    - [ ] `dev/test`: perfil ampliado para DX
-- [ ] Documentar matriz de risco/segurança por flag
-
-**Critério de aceite:** usuário consegue habilitar compat gradualmente sem alterar código da aplicação.
-
+Não implementar flag de compatibilidade, node compat será ativo por padrão.
 ---
 
 ### 5.13 Gap Analysis — Cloudflare Workers Node APIs (baseline oficial)

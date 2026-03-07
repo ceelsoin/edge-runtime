@@ -72,43 +72,16 @@ import { EventSource } from "ext:deno_fetch/27_eventsource.js";
 import "ext:deno_net/01_net.js";
 import "ext:deno_net/02_tls.js";
 
-// node:* compatibility modules (must be evaluated to satisfy extension ESM checks)
+// node:* critical modules (required for core functionality and tests)
 import "node:process";
-import "node:assert";
-import "node:async_hooks";
-import "node:child_process";
-import "node:cluster";
-import "node:console";
-import "node:diagnostics_channel";
-import "node:dgram";
-import "node:dns";
 import "node:buffer";
-import "node:events";
 import "node:util";
 import "node:path";
 import "node:url";
-import "node:querystring";
-import "node:punycode";
+import "node:async_hooks";
+import "node:events";
+import "node:crypto";
 import "node:stream";
-import "node:string_decoder";
-import "node:os";
-import "node:net";
-import "node:http";
-import "node:https";
-import "node:http2";
-import "node:tls";
-import "node:perf_hooks";
-import "node:inspector";
-import "node:readline";
-import "node:repl";
-import "node:v8";
-import "node:vm";
-import "node:zlib";
-import "node:timers";
-import "node:timers/promises";
-import "node:module";
-import "node:fs";
-import "node:fs/promises";
 
 // edge_assert (native assert helpers for user imports)
 // Optional: only present when CLI test mode enables this extension.

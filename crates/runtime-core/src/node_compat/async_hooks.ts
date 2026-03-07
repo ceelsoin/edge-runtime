@@ -8,7 +8,8 @@ type HookCallbacks = {
 
 type HookInstance = HookCallbacks & { enabled: boolean };
 
-const alsRegistry = new Set<AsyncLocalStorage<unknown>>();
+// Export the registry so EventEmitter can access it
+export const alsRegistry = new Set<AsyncLocalStorage<unknown>>();
 const hookRegistry = new Set<HookInstance>();
 
 let nextAsyncId = 2;
