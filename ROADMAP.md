@@ -3,7 +3,7 @@
 > Baseado na auditoria de segurança e arquitetura realizada em 05/03/2026.
 > Cada item referencia o finding correspondente no `AUDIT.md`.
 >
-> Última atualização: 07/03/2026 (P1 de VFS seguro em `node:fs` concluído com quotas configuráveis por manifest/flag/env, `http/https` client-side compat, P2 de `node:dns` via DoH controlado, expansão de `node:util`/`node:diagnostics_channel`, `async_hooks`/ALS com propagação real e P3 de `node:zlib` funcional parcial com backend nativo, limites configuráveis de runtime sob caps rígidos e guardrail de tempo).
+> Última atualização: 07/03/2026 (P1 de VFS seguro em `node:fs` concluído com quotas configuráveis por manifest/flag/env, `http/https` client-side compat, P2 de `node:dns` via DoH controlado, expansão de `node:util`/`node:diagnostics_channel`, `async_hooks`/ALS com propagação real e P3 de `node:zlib` funcional parcial com backend nativo, limites configuráveis de runtime sob caps rígidos e guardrail de tempo; backlog do `ROADMAP-NODE-COMPAT.md` consolidado neste documento).
 > Commits de referência: `92aa473`, `6607a2b`, `4933dda`.
 > Inclui também mudanças locais ainda não commitadas em `functions/runtime-core`.
 
@@ -831,6 +831,57 @@ Status aplicado desta trilha: etapas A/B/C/D concluídas em perfil `Full/Partial
 - Matriz `node:*` no relatório com classificação convergente ao baseline Cloudflare.
 - Diferenças remanescentes explicitamente documentadas como "intencionais por sandbox".
 - Nenhuma feature de compatibilidade libera acesso ao host físico.
+
+---
+
+### 5.14 Backlog Integrado Node Compat (Fonte Única de Execução)
+
+> Esta seção consolida os itens pendentes do `ROADMAP-NODE-COMPAT.md` para evitar backlog paralelo.
+> Referências canônicas: `ROADMAP-NODE-COMPAT.md §5`, `§7`, `§8`, `§9`, `§10`.
+
+#### P1 — Crítico para SSR Frameworks (Next/Remix)
+
+- [ ] Implementar `node:crypto` (bridge sobre WebCrypto) com subset mínimo:
+    - `randomBytes`, `randomFill`, `randomFillSync`, `createHash`, `createHmac`.
+    - Referência: `ROADMAP-NODE-COMPAT.md §5.1.1`, `§7.1.1`, `§9 Issue #1`, `§10 Phase 1`.
+- [ ] Fechar semântica de streams com backpressure real:
+    - `pause/resume`, `highWaterMark`, sinalização de pressão em `push`, ajuste em `pipeline/pipe`.
+    - Referência: `ROADMAP-NODE-COMPAT.md §5.1.2`, `§7.1.2`, `§9 Issue #2`, `§10 Phase 1`.
+- [ ] Expandir propagação de contexto ALS além de Promise/microtask/timers:
+    - EventEmitter handlers e callbacks assíncronos críticos (incluindo `fs`).
+    - Referência: `ROADMAP-NODE-COMPAT.md §5.1.3`, `§7.1.3`, `§9 Issue #3`, `§9 Issue #10`, `§10 Phase 1/2`.
+
+#### P2 — Compatibilidade de I/O e HTTP em Perfil Seguro
+
+- [ ] Implementar `fs.createReadStream` e `fs.createWriteStream` no VFS (sem acesso ao host).
+    - Referência: `ROADMAP-NODE-COMPAT.md §5.1.4`, `§7.2.2`, `§9 Issue #4`, `§10 Phase 2`.
+- [ ] Avaliar suporte limitado de `http.createServer` para modo dev/test (não multi-tenant prod por padrão).
+    - Referência: `ROADMAP-NODE-COMPAT.md §7.2.1`, `§9 Issue #6`, `§10 Phase 4`.
+- [ ] Opcional de segurança criptográfica (após P1):
+    - `createCipheriv`/`createDecipheriv` e KDFs (`pbkdf2`/`scrypt`) conforme perfil de risco.
+    - Referência: `ROADMAP-NODE-COMPAT.md §7.3`, `§9 Issue #7`, `§10 Phase 3`.
+
+#### P3 — Hardening e Governança de Compat
+
+- [ ] Implementar rate limiting de saída (egress) por função/perfil para reduzir abuso de rede.
+    - Referência: `ROADMAP-NODE-COMPAT.md §4.4` (Security checklist TODO: outbound rate limiting).
+- [ ] Implementar verificação de integridade do VFS (detecção de corrupção/estado inválido).
+    - Referência: `ROADMAP-NODE-COMPAT.md §4.4` (Security checklist TODO: VFS integrity checking).
+- [ ] Publicar matriz de compatibilidade Node em formato consultável por humanos e CI:
+    - Documento `docs/NODE-COMPAT.md` + gate de regressão no CI para níveis `Full/Partial/Stub/None`.
+    - Referência: `ROADMAP-NODE-COMPAT.md §8`, `§9 Issue #8`, `§10 Phase 5`.
+- [ ] Adicionar stub explícito para `node:worker_threads` com erro determinístico orientando limitações de sandbox.
+    - Referência: `ROADMAP-NODE-COMPAT.md §7.3.1`, `§9 Issue #5`.
+
+#### P4 — Performance e Operação Contínua
+
+- [ ] Benchmark e otimização de throughput/latência das novas APIs de `node:crypto`.
+    - Referência: `ROADMAP-NODE-COMPAT.md §9 Issue #9`, `§10 Phase 5`.
+
+#### Critério de Conclusão da Consolidação
+
+- [ ] Todo item pendente de `ROADMAP-NODE-COMPAT.md` deve apontar para esta seção ou estar marcado como concluído/descartado com justificativa.
+- [ ] Não manter backlog duplicado divergente entre `ROADMAP.md` e `ROADMAP-NODE-COMPAT.md`.
 
 ---
 
