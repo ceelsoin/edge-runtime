@@ -3,7 +3,7 @@
 > Baseado na auditoria de segurança e arquitetura realizada em 05/03/2026.
 > Cada item referencia o finding correspondente no `AUDIT.md`.
 >
-> Última atualização: 07/03/2026 (P1 de VFS seguro em `node:fs` concluído com quotas configuráveis por manifest/flag/env, `http/https` client-side compat, P2 de `node:dns` via DoH controlado, expansão de `node:util`/`node:diagnostics_channel` e `async_hooks`/ALS com propagação real).
+> Última atualização: 07/03/2026 (P1 de VFS seguro em `node:fs` concluído com quotas configuráveis por manifest/flag/env, `http/https` client-side compat, P2 de `node:dns` via DoH controlado, expansão de `node:util`/`node:diagnostics_channel`, `async_hooks`/ALS com propagação real e P3 de `node:zlib` funcional parcial).
 > Commits de referência: `92aa473`, `6607a2b`, `4933dda`.
 > Inclui também mudanças locais ainda não commitadas em `functions/runtime-core`.
 
@@ -821,7 +821,9 @@ Notas de cobertura:
     - Status aplicado: `AsyncLocalStorage` com propagação de contexto para `Promise.then/catch` e `queueMicrotask` via instrumentação de callbacks.
     - Status aplicado: `createHook` funcional (subset) com `enable/disable` e eventos (`init`, `before`, `after`, `destroy`) em recursos instrumentados.
     - Status aplicado: `executionAsyncId`/`triggerAsyncId` e `AsyncResource.runInAsyncScope` com IDs estáveis no escopo compat.
-- [ ] **P3:** substituir `zlib` stub por implementação funcional (ou bridge para APIs nativas de compressão).
+- [x] **P3:** substituir `zlib` stub por implementação funcional (ou bridge para APIs nativas de compressão).
+    - Status aplicado: subset funcional assíncrono em `node:zlib` (`gzip/gunzip/deflate/inflate/deflateRaw/inflateRaw`) sobre `CompressionStream`/`DecompressionStream`.
+    - Status aplicado: APIs sync e construtores de stream não suportados permanecem em stub determinístico (`ERR_NOT_IMPLEMENTED`) para manter previsibilidade no sandbox.
 
 **Critério de aceite desta trilha:**
 - Matriz `node:*` no relatório com classificação convergente ao baseline Cloudflare.

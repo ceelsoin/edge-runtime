@@ -811,6 +811,23 @@ fn additional_node_stub_modules_import_and_behave_predictably() {
       try { new vm.Script('1+1').runInThisContext(); } catch (_) { deterministicErrors++; }
       try { zlib.gzipSync('x'); } catch (_) { deterministicErrors++; }
 
+            const zlibCompat = await new Promise((resolve) => {
+                zlib.gzip('hello-zlib', (gzipErr, gz) => {
+                    if (gzipErr || !gz) {
+                        resolve(false);
+                        return;
+                    }
+                    zlib.gunzip(gz, (gunzipErr, plain) => {
+                        if (gunzipErr || !plain) {
+                            resolve(false);
+                            return;
+                        }
+                        const text = typeof plain === 'string' ? plain : new TextDecoder().decode(plain);
+                        resolve(text === 'hello-zlib');
+                    });
+                });
+            });
+
             const als = new asyncHooks.AsyncLocalStorage();
             const hook = asyncHooks.createHook({
                 init: () => {},
@@ -951,6 +968,7 @@ fn additional_node_stub_modules_import_and_behave_predictably() {
                 dnsLookupCompat &&
                 dnsResolveCompat &&
                 dnsReverseCompat &&
+                zlibCompat &&
                 httpFetchCompat &&
                 httpsFetchCompat &&
                 typeof querystring.stringify === 'function' &&

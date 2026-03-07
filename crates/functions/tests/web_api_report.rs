@@ -907,16 +907,36 @@ fn define_node_compat_checks() -> Vec<NodeCompatCheck> {
                 },
                 NodeCompatCheck {
                         api: "node:zlib",
-                        profile: "Stub/Partial",
-                        notes: "Zlib import compatibility with deterministic non-functional compression operations.",
+                        profile: "Partial",
+                        notes: "Functional async compression subset (`gzip/gunzip/deflate/inflate/deflateRaw/inflateRaw`) via Web Compression Streams; sync/stream constructors remain deterministic stubs.",
                         js_check: r#"(() => {
                             const key = '__edge_node_zlib_check';
                             if (globalThis[key] === undefined) {
                                 globalThis[key] = 'pending';
                                 import('node:zlib').then((m) => {
-                                    let deterministic = false;
-                                    try { m.gzipSync('x'); } catch (err) { deterministic = String(err?.message || '').includes('not implemented'); }
-                                    globalThis[key] = typeof m.createGzip === 'function' && deterministic ? 'partial' : 'none';
+                                    m.gzip('report-zlib', (gzipErr, gz) => {
+                                        if (gzipErr || !gz) {
+                                            globalThis[key] = 'none';
+                                            return;
+                                        }
+                                        m.gunzip(gz, (gunzipErr, plain) => {
+                                            if (gunzipErr || !plain) {
+                                                globalThis[key] = 'none';
+                                                return;
+                                            }
+                                            const text = typeof plain === 'string' ? plain : new TextDecoder().decode(plain);
+                                            let syncStub = false;
+                                            try { m.gzipSync('x'); } catch (err) { syncStub = String(err?.message || '').includes('not implemented'); }
+                                            globalThis[key] =
+                                                text === 'report-zlib' &&
+                                                typeof m.deflate === 'function' &&
+                                                typeof m.inflate === 'function' &&
+                                                typeof m.deflateRaw === 'function' &&
+                                                typeof m.inflateRaw === 'function' &&
+                                                syncStub
+                                                ? 'partial' : 'none';
+                                        });
+                                    });
                                 }).catch(() => {
                                     globalThis[key] = 'none';
                                 });
