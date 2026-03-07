@@ -76,6 +76,18 @@ pub struct IsolateConfig {
     /// VFS max file size in bytes (default: 5 MiB).
     #[serde(default = "default_vfs_max_file_bytes")]
     pub vfs_max_file_bytes: usize,
+
+    /// DNS-over-HTTPS resolver endpoint used by node:dns compat layer.
+    #[serde(default = "default_dns_doh_endpoint")]
+    pub dns_doh_endpoint: String,
+
+    /// Maximum DNS answers returned per query.
+    #[serde(default = "default_dns_max_answers")]
+    pub dns_max_answers: usize,
+
+    /// Timeout for DNS resolver requests in milliseconds.
+    #[serde(default = "default_dns_timeout_ms")]
+    pub dns_timeout_ms: u64,
 }
 
 fn default_max_heap() -> usize {
@@ -106,6 +118,18 @@ fn default_vfs_max_file_bytes() -> usize {
     5 * 1024 * 1024
 }
 
+fn default_dns_doh_endpoint() -> String {
+    "https://1.1.1.1/dns-query".to_string()
+}
+
+fn default_dns_max_answers() -> usize {
+    16
+}
+
+fn default_dns_timeout_ms() -> u64 {
+    2000
+}
+
 impl Default for IsolateConfig {
     fn default() -> Self {
         Self {
@@ -120,6 +144,9 @@ impl Default for IsolateConfig {
             print_isolate_logs: default_print_isolate_logs(),
             vfs_total_quota_bytes: default_vfs_total_quota_bytes(),
             vfs_max_file_bytes: default_vfs_max_file_bytes(),
+            dns_doh_endpoint: default_dns_doh_endpoint(),
+            dns_max_answers: default_dns_max_answers(),
+            dns_timeout_ms: default_dns_timeout_ms(),
         }
     }
 }
@@ -282,6 +309,9 @@ mod tests {
         assert!(config.print_isolate_logs);
         assert_eq!(config.vfs_total_quota_bytes, 10 * 1024 * 1024);
         assert_eq!(config.vfs_max_file_bytes, 5 * 1024 * 1024);
+        assert_eq!(config.dns_doh_endpoint, "https://1.1.1.1/dns-query");
+        assert_eq!(config.dns_max_answers, 16);
+        assert_eq!(config.dns_timeout_ms, 2000);
     }
 
     #[test]
@@ -297,6 +327,9 @@ mod tests {
         assert!(config.print_isolate_logs);
         assert_eq!(config.vfs_total_quota_bytes, 10 * 1024 * 1024);
         assert_eq!(config.vfs_max_file_bytes, 5 * 1024 * 1024);
+        assert_eq!(config.dns_doh_endpoint, "https://1.1.1.1/dns-query");
+        assert_eq!(config.dns_max_answers, 16);
+        assert_eq!(config.dns_timeout_ms, 2000);
     }
 
     #[test]
@@ -325,6 +358,9 @@ mod tests {
         assert!(json.contains("\"print_isolate_logs\""));
         assert!(json.contains("\"vfs_total_quota_bytes\""));
         assert!(json.contains("\"vfs_max_file_bytes\""));
+        assert!(json.contains("\"dns_doh_endpoint\""));
+        assert!(json.contains("\"dns_max_answers\""));
+        assert!(json.contains("\"dns_timeout_ms\""));
     }
 
     #[test]

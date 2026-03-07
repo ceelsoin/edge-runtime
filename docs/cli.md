@@ -394,6 +394,18 @@ This prevents functions from accessing sensitive internal endpoints like cloud m
   - Max writable file size per isolate in VFS (`/tmp`).
   - Default: `5242880` (5 MiB)
   - Env: `EDGE_RUNTIME_VFS_MAX_FILE_BYTES`
+- `--dns-doh-endpoint <URL>`
+  - DNS-over-HTTPS endpoint used by `node:dns` compatibility APIs.
+  - Default: `https://1.1.1.1/dns-query`
+  - Env: `EDGE_RUNTIME_DNS_DOH_ENDPOINT`
+- `--dns-max-answers <COUNT>`
+  - Maximum number of DNS answers returned per query in `node:dns`.
+  - Default: `16`
+  - Env: `EDGE_RUNTIME_DNS_MAX_ANSWERS`
+- `--dns-timeout-ms <MS>`
+  - DNS resolver request timeout for `node:dns` DoH lookups.
+  - Default: `2000`
+  - Env: `EDGE_RUNTIME_DNS_TIMEOUT_MS`
 - `--print-isolate-logs`
   - Print user `console.*` output from isolates into runtime logs/stdout.
   - Default: `true`
@@ -658,6 +670,18 @@ thunder watch [OPTIONS]
   - Max writable file size per isolate in VFS.
   - Default: `5242880` (5 MiB)
   - Env: `EDGE_RUNTIME_VFS_MAX_FILE_BYTES`
+- `--dns-doh-endpoint <URL>`
+  - DNS-over-HTTPS endpoint used by `node:dns` compatibility APIs.
+  - Default: `https://1.1.1.1/dns-query`
+  - Env: `EDGE_RUNTIME_DNS_DOH_ENDPOINT`
+- `--dns-max-answers <COUNT>`
+  - Maximum number of DNS answers returned per query in `node:dns`.
+  - Default: `16`
+  - Env: `EDGE_RUNTIME_DNS_MAX_ANSWERS`
+- `--dns-timeout-ms <MS>`
+  - DNS resolver request timeout for `node:dns` DoH lookups.
+  - Default: `2000`
+  - Env: `EDGE_RUNTIME_DNS_TIMEOUT_MS`
 - `--print-isolate-logs`
   - Print user `console.*` output from isolates into runtime logs/stdout.
   - Default: `true`

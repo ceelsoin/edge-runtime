@@ -3,7 +3,7 @@
 > Baseado na auditoria de segurança e arquitetura realizada em 05/03/2026.
 > Cada item referencia o finding correspondente no `AUDIT.md`.
 >
-> Última atualização: 07/03/2026 (P1 de VFS seguro em `node:fs` concluído com quotas configuráveis por manifest/flag/env, além de `http/https` client-side compat).
+> Última atualização: 07/03/2026 (P1 de VFS seguro em `node:fs` concluído com quotas configuráveis por manifest/flag/env, `http/https` client-side compat e P2 de `node:dns` via DoH controlado).
 > Commits de referência: `92aa473`, `6607a2b`, `4933dda`.
 > Inclui também mudanças locais ainda não commitadas em `functions/runtime-core`.
 
@@ -810,7 +810,10 @@ Notas de cobertura:
 - [x] **P1:** `node:net` outbound-only (sem `net.Server`) e `node:tls` outbound compatível.
     - Status aplicado: `net.connect`/`createConnection` e `tls.connect` expostos para subset cliente outbound.
     - Status aplicado: superfícies server/context não implementadas continuam em stub determinístico (`net.Server.listen`, `tls.createServer`, `tls.createSecureContext`).
-- [ ] **P2:** `dns` funcional via resolver controlado (DoH/subrequest), com limites explícitos.
+- [x] **P2:** `dns` funcional via resolver controlado (DoH/subrequest), com limites explícitos.
+    - Status aplicado: subset funcional em `node:dns` para `lookup`, `resolve*`, `reverse` e equivalentes em `dns.promises`.
+    - Status aplicado: respostas limitadas por consulta (`dns_max_answers`) e endpoint/timeout configuráveis globalmente (`--dns-doh-endpoint`, `--dns-max-answers`, `--dns-timeout-ms` + envs equivalentes).
+    - Status aplicado: APIs fora do subset permanecem em stub determinístico (`ERR_NOT_IMPLEMENTED`).
 - [ ] **P2:** expandir `util` (`MIMEType`) e `diagnostics_channel` (`TracingChannel`) conforme documentação.
 - [ ] **P2:** elevar `async_hooks`/ALS de stub para uso real com testes de propagação de contexto.
 - [ ] **P3:** substituir `zlib` stub por implementação funcional (ou bridge para APIs nativas de compressão).

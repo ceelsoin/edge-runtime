@@ -794,7 +794,7 @@ fn additional_node_stub_modules_import_and_behave_predictably() {
       let deterministicErrors = 0;
       try { childProcess.exec('echo hi'); } catch (_) { deterministicErrors++; }
       try { cluster.fork(); } catch (_) { deterministicErrors++; }
-      try { dns.resolve('example.com'); } catch (_) { deterministicErrors++; }
+      try { dns.lookupService('1.1.1.1', 53, () => {}); } catch (_) { deterministicErrors++; }
       try { dgram.createSocket('udp4'); } catch (_) { deterministicErrors++; }
     try { net.createServer().listen(80); } catch (_) { deterministicErrors++; }
     try { tls.createServer(); } catch (_) { deterministicErrors++; }
@@ -803,7 +803,61 @@ fn additional_node_stub_modules_import_and_behave_predictably() {
       try { zlib.gzipSync('x'); } catch (_) { deterministicErrors++; }
 
             const previousFetchHook = globalThis.__edgeMockFetchHandler;
-            globalThis.__edgeMockFetchHandler = async () => new Response('ok-from-mock', { status: 200 });
+            globalThis.__edgeMockFetchHandler = async (input) => {
+                const raw = typeof input === 'string' ? input : input?.url;
+                const url = new URL(String(raw || 'https://example.com/'));
+
+                if (url.pathname.includes('dns-query')) {
+                    const type = (url.searchParams.get('type') || 'A').toUpperCase();
+                    const name = (url.searchParams.get('name') || '').toLowerCase();
+
+                    if (type === 'A' && name === 'example.com') {
+                        return new Response(JSON.stringify({
+                            Status: 0,
+                            Answer: [{ type: 1, data: '93.184.216.34' }],
+                        }), { status: 200, headers: { 'content-type': 'application/dns-json' } });
+                    }
+
+                    if (type === 'AAAA' && name === 'example.com') {
+                        return new Response(JSON.stringify({ Status: 0, Answer: [] }), {
+                            status: 200,
+                            headers: { 'content-type': 'application/dns-json' },
+                        });
+                    }
+
+                    if (type === 'PTR' && name === '34.216.184.93.in-addr.arpa') {
+                        return new Response(JSON.stringify({
+                            Status: 0,
+                            Answer: [{ type: 12, data: 'example.com' }],
+                        }), { status: 200, headers: { 'content-type': 'application/dns-json' } });
+                    }
+
+                    return new Response(JSON.stringify({ Status: 3, Answer: [] }), {
+                        status: 200,
+                        headers: { 'content-type': 'application/dns-json' },
+                    });
+                }
+
+                return new Response('ok-from-mock', { status: 200 });
+            };
+
+            const dnsLookupCompat = await new Promise((resolve) => {
+                dns.lookup('example.com', (err, address, family) => {
+                    resolve(!err && address === '93.184.216.34' && family === 4);
+                });
+            });
+
+            const dnsResolveCompat = await new Promise((resolve) => {
+                dns.resolve4('example.com', (err, records) => {
+                    resolve(!err && Array.isArray(records) && records[0] === '93.184.216.34');
+                });
+            });
+
+            const dnsReverseCompat = await new Promise((resolve) => {
+                dns.reverse('93.184.216.34', (err, hostnames) => {
+                    resolve(!err && Array.isArray(hostnames) && hostnames[0] === 'example.com');
+                });
+            });
 
             const httpFetchCompat = await new Promise((resolve) => {
                 http.get('https://example.com', (res) => {
@@ -846,6 +900,10 @@ fn additional_node_stub_modules_import_and_behave_predictably() {
                 typeof tls.connect === 'function' &&
                 typeof http.request === 'function' &&
                 typeof https.request === 'function' &&
+                typeof dns.promises?.lookup === 'function' &&
+                dnsLookupCompat &&
+                dnsResolveCompat &&
+                dnsReverseCompat &&
                 httpFetchCompat &&
                 httpsFetchCompat &&
                 typeof querystring.stringify === 'function' &&

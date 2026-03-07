@@ -425,16 +425,64 @@ fn define_node_compat_checks() -> Vec<NodeCompatCheck> {
                 },
                 NodeCompatCheck {
                         api: "node:dns",
-                        profile: "Stub/Partial",
-                        notes: "DNS module imports for compatibility while network resolution calls are not implemented.",
+                        profile: "Partial",
+                        notes: "DoH-backed subset (`lookup`, `resolve*`, `reverse`) with bounded answers/timeouts; unsupported APIs remain deterministic stubs.",
                         js_check: r#"(() => {
                             const key = '__edge_node_dns_check';
                             if (globalThis[key] === undefined) {
                                 globalThis[key] = 'pending';
                                 import('node:dns').then((m) => {
-                                    let deterministic = false;
-                                    try { m.resolve('example.com'); } catch (err) { deterministic = String(err?.message || '').includes('not implemented'); }
-                                    globalThis[key] = typeof m.lookup === 'function' && deterministic ? 'partial' : 'none';
+                                    const prev = globalThis.__edgeMockFetchHandler;
+                                    globalThis.__edgeMockFetchHandler = async (input) => {
+                                        const raw = typeof input === 'string' ? input : input?.url;
+                                        const url = new URL(String(raw || 'https://example.com/'));
+                                        if (url.pathname.includes('dns-query')) {
+                                            const type = (url.searchParams.get('type') || 'A').toUpperCase();
+                                            const name = (url.searchParams.get('name') || '').toLowerCase();
+                                            if (type === 'A' && name === 'example.com') {
+                                                return new Response(JSON.stringify({
+                                                    Status: 0,
+                                                    Answer: [{ type: 1, data: '93.184.216.34' }],
+                                                }), { status: 200, headers: { 'content-type': 'application/dns-json' } });
+                                            }
+                                            if (type === 'AAAA' && name === 'example.com') {
+                                                return new Response(JSON.stringify({ Status: 0, Answer: [] }), {
+                                                    status: 200,
+                                                    headers: { 'content-type': 'application/dns-json' },
+                                                });
+                                            }
+                                            if (type === 'PTR' && name === '34.216.184.93.in-addr.arpa') {
+                                                return new Response(JSON.stringify({
+                                                    Status: 0,
+                                                    Answer: [{ type: 12, data: 'example.com' }],
+                                                }), { status: 200, headers: { 'content-type': 'application/dns-json' } });
+                                            }
+                                            return new Response(JSON.stringify({ Status: 3, Answer: [] }), {
+                                                status: 200,
+                                                headers: { 'content-type': 'application/dns-json' },
+                                            });
+                                        }
+                                        return new Response('ok', { status: 200 });
+                                    };
+
+                                    m.lookup('example.com', (err, address, family) => {
+                                        if (err || address !== '93.184.216.34' || family !== 4) {
+                                            globalThis.__edgeMockFetchHandler = prev;
+                                            globalThis[key] = 'none';
+                                            return;
+                                        }
+                                        m.resolve4('example.com', (resolveErr, records) => {
+                                            if (resolveErr || !Array.isArray(records) || records[0] !== '93.184.216.34') {
+                                                globalThis.__edgeMockFetchHandler = prev;
+                                                globalThis[key] = 'none';
+                                                return;
+                                            }
+                                            m.reverse('93.184.216.34', (reverseErr, hostnames) => {
+                                                globalThis.__edgeMockFetchHandler = prev;
+                                                globalThis[key] = (!reverseErr && Array.isArray(hostnames) && hostnames[0] === 'example.com') ? 'partial' : 'none';
+                                            });
+                                        });
+                                    });
                                 }).catch(() => {
                                     globalThis[key] = 'none';
                                 });

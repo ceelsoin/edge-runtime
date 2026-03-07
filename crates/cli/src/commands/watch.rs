@@ -77,6 +77,30 @@ pub struct WatchArgs {
     )]
     vfs_max_file_bytes: usize,
 
+    /// DNS-over-HTTPS resolver endpoint used by node:dns compatibility layer.
+    #[arg(
+        long,
+        default_value = "https://1.1.1.1/dns-query",
+        env = "EDGE_RUNTIME_DNS_DOH_ENDPOINT"
+    )]
+    dns_doh_endpoint: String,
+
+    /// Maximum DNS answers returned per query by node:dns compatibility layer.
+    #[arg(
+        long,
+        default_value_t = 16,
+        env = "EDGE_RUNTIME_DNS_MAX_ANSWERS"
+    )]
+    dns_max_answers: usize,
+
+    /// DNS resolver timeout in milliseconds for node:dns compatibility layer.
+    #[arg(
+        long,
+        default_value_t = 2000,
+        env = "EDGE_RUNTIME_DNS_TIMEOUT_MS"
+    )]
+    dns_timeout_ms: u64,
+
     /// Outgoing HTTP proxy URL (eg. http://proxy.local:8080, socks5://proxy.local:1080)
     #[arg(long, env = "EDGE_RUNTIME_HTTP_OUTGOING_PROXY")]
     http_outgoing_proxy: Option<String>,
@@ -394,6 +418,9 @@ async fn load_and_deploy_functions(
             print_isolate_logs: default_config.print_isolate_logs,
             vfs_total_quota_bytes: default_config.vfs_total_quota_bytes,
             vfs_max_file_bytes: default_config.vfs_max_file_bytes,
+            dns_doh_endpoint: default_config.dns_doh_endpoint.clone(),
+            dns_max_answers: default_config.dns_max_answers,
+            dns_timeout_ms: default_config.dns_timeout_ms,
         };
 
         match bundle_file(file_path).await {
@@ -564,6 +591,9 @@ fn build_watch_default_config(args: &WatchArgs) -> IsolateConfig {
         print_isolate_logs: args.print_isolate_logs,
         vfs_total_quota_bytes: args.vfs_total_quota_bytes,
         vfs_max_file_bytes: args.vfs_max_file_bytes,
+        dns_doh_endpoint: args.dns_doh_endpoint.clone(),
+        dns_max_answers: args.dns_max_answers,
+        dns_timeout_ms: args.dns_timeout_ms,
     }
 }
 
@@ -603,6 +633,9 @@ mod tests {
             print_isolate_logs: true,
             vfs_total_quota_bytes: 10 * 1024 * 1024,
             vfs_max_file_bytes: 5 * 1024 * 1024,
+            dns_doh_endpoint: "https://1.1.1.1/dns-query".to_string(),
+            dns_max_answers: 16,
+            dns_timeout_ms: 2000,
             http_outgoing_proxy: None,
             https_outgoing_proxy: None,
             tcp_outgoing_proxy: None,

@@ -207,6 +207,30 @@ pub struct StartArgs {
     )]
     vfs_max_file_bytes: usize,
 
+    /// DNS-over-HTTPS resolver endpoint used by node:dns compatibility layer.
+    #[arg(
+        long,
+        default_value = "https://1.1.1.1/dns-query",
+        env = "EDGE_RUNTIME_DNS_DOH_ENDPOINT"
+    )]
+    dns_doh_endpoint: String,
+
+    /// Maximum DNS answers returned per query by node:dns compatibility layer.
+    #[arg(
+        long,
+        default_value_t = 16,
+        env = "EDGE_RUNTIME_DNS_MAX_ANSWERS"
+    )]
+    dns_max_answers: usize,
+
+    /// DNS resolver timeout in milliseconds for node:dns compatibility layer.
+    #[arg(
+        long,
+        default_value_t = 2000,
+        env = "EDGE_RUNTIME_DNS_TIMEOUT_MS"
+    )]
+    dns_timeout_ms: u64,
+
     /// Source map handling for modules loaded from eszip
     #[arg(
         long,
@@ -270,6 +294,9 @@ pub fn run(args: StartArgs) -> Result<(), anyhow::Error> {
             print_isolate_logs: args.print_isolate_logs,
             vfs_total_quota_bytes: args.vfs_total_quota_bytes,
             vfs_max_file_bytes: args.vfs_max_file_bytes,
+            dns_doh_endpoint: args.dns_doh_endpoint,
+            dns_max_answers: args.dns_max_answers,
+            dns_timeout_ms: args.dns_timeout_ms,
         };
 
         let pool_config = PoolRuntimeConfig {

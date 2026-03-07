@@ -179,7 +179,7 @@ Unsupported privileged behavior fails with deterministic errors (for example `EO
 | `node:cluster` | 🟡 Partial (stub/non-functional) | Stub/Partial | Partial | Non-functional cluster orchestration APIs with deterministic failures. |
 | `node:console` | 🟢 Supported (practical subset) | Partial | Partial | Console module compatibility maps to runtime console implementation. |
 | `node:diagnostics_channel` | 🟢 Supported (practical subset) | Partial | Partial | Basic publish/subscribe diagnostics channel surface. |
-| `node:dns` | 🟡 Partial (stub/non-functional) | Stub/Partial | Partial | DNS module imports for compatibility while network resolution calls are not implemented. |
+| `node:dns` | 🟢 Supported (practical subset) | Partial | Partial | DoH-backed subset (`lookup`, `resolve*`, `reverse`) with bounded answers/timeouts; unsupported APIs remain deterministic stubs. |
 | `node:http` | 🟡 Partial (stub/non-functional) | Stub/Partial | Partial | HTTP client compatibility is provided as a wrapper around `fetch()`; server-side APIs remain non-functional. |
 | `node:https` | 🟡 Partial (stub/non-functional) | Stub/Partial | Partial | HTTPS client compatibility is provided as a wrapper around `fetch()`; server-side APIs remain non-functional. |
 | `node:http2` | 🟡 Partial (stub/non-functional) | Stub/Partial | Partial | HTTP/2 compatibility surface for imports with deterministic non-functional operations. |

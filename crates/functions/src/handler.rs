@@ -132,6 +132,15 @@ pub fn inject_request_bridge_with_proxy_and_config(
     );
     js_runtime.execute_script("edge-internal:///runtime_vfs_config.js", set_vfs_config)?;
 
+    let dns_doh_endpoint_json = serde_json::to_string(&isolate_config.dns_doh_endpoint)
+        .map_err(|e| anyhow::anyhow!("failed to serialize dns resolver endpoint: {e}"))?;
+    let set_dns_config = format!(
+        "globalThis.__edgeRuntimeDnsConfig = {{ dohEndpoint: {dns_doh_endpoint_json}, maxAnswers: {}, timeoutMs: {} }};",
+        isolate_config.dns_max_answers,
+        isolate_config.dns_timeout_ms,
+    );
+    js_runtime.execute_script("edge-internal:///runtime_dns_config.js", set_dns_config)?;
+
     js_runtime.execute_script(
         "edge-internal:///runtime_bridge.js",
         deno_core::ascii_str!(
