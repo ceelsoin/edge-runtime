@@ -754,6 +754,28 @@ mod tests {
         String::from_utf8_lossy(&response).to_string()
     }
 
+    async fn send_plain_http_bytes(addr: SocketAddr, head: &str, body: &[u8]) -> String {
+        let mut stream = TcpStream::connect(addr)
+            .await
+            .expect("failed to connect to server");
+        stream
+            .write_all(head.as_bytes())
+            .await
+            .expect("failed to write request head");
+        stream
+            .write_all(body)
+            .await
+            .expect("failed to write request body");
+
+        let mut response = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), stream.read_to_end(&mut response))
+            .await
+            .expect("timed out waiting for response")
+            .expect("failed to read response");
+
+        String::from_utf8_lossy(&response).to_string()
+    }
+
     fn make_temp_tls_files() -> (
         std::path::PathBuf,
         std::path::PathBuf,
@@ -963,6 +985,342 @@ mod tests {
             get_resp.contains("\"min\":1") && get_resp.contains("\"max\":2"),
             "GET response should return updated limits: {get_resp}"
         );
+
+        shutdown.cancel();
+        let server_result = tokio::time::timeout(Duration::from_secs(3), server_handle)
+            .await
+            .expect("server task did not finish in time")
+            .expect("server join error");
+        server_result.expect("server returned error");
+    }
+
+    #[tokio::test]
+    async fn e2e_deploy_corrupted_bundle_returns_400_without_crash() {
+        init_deno_platform();
+
+        let admin_probe = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("failed to bind admin probe listener");
+        let admin_addr = admin_probe
+            .local_addr()
+            .expect("failed to get admin local addr");
+        drop(admin_probe);
+
+        let ingress_probe = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("failed to bind ingress probe listener");
+        let ingress_addr = ingress_probe
+            .local_addr()
+            .expect("failed to get ingress local addr");
+        drop(ingress_probe);
+
+        let registry = make_test_registry();
+        let shutdown = CancellationToken::new();
+
+        let server_config = DualServerConfig {
+            admin: AdminListenerConfig {
+                addr: admin_addr,
+                api_key: None,
+                tls: None,
+                body_limits: BodyLimitsConfig::default(),
+                bundle_signature: BundleSignatureConfig {
+                    required: false,
+                    public_key_path: None,
+                },
+            },
+            ingress: IngressListenerConfig {
+                listener_type: IngressListenerType::Tcp(ingress_addr),
+                tls: None,
+                rate_limit_rps: None,
+                body_limits: BodyLimitsConfig::default(),
+            },
+            graceful_exit_deadline_secs: 1,
+            max_connections: 128,
+        };
+
+        let server_shutdown = shutdown.clone();
+        let registry_for_server = registry.clone();
+        let server_handle = tokio::spawn(async move {
+            run_dual_server(server_config, registry_for_server, server_shutdown).await
+        });
+
+        tokio::time::sleep(Duration::from_millis(120)).await;
+
+        let bad_payload = b"not-a-valid-bundle";
+        let bad_req = format!(
+            "POST /_internal/functions?name=corrupted HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            bad_payload.len(),
+            String::from_utf8_lossy(bad_payload)
+        );
+        let bad_resp = send_plain_http(admin_addr, &bad_req).await;
+        assert!(
+            bad_resp.starts_with("HTTP/1.1 400"),
+            "expected 400 for corrupted bundle deploy, got: {bad_resp}"
+        );
+
+        let list_req = "GET /_internal/functions HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+        let list_resp = send_plain_http(admin_addr, list_req).await;
+        assert!(
+            list_resp.starts_with("HTTP/1.1 200"),
+            "server should remain alive after bad bundle deploy: {list_resp}"
+        );
+
+        shutdown.cancel();
+        let server_result = tokio::time::timeout(Duration::from_secs(3), server_handle)
+            .await
+            .expect("server task did not finish in time")
+            .expect("server join error");
+        server_result.expect("server returned error");
+    }
+
+    #[tokio::test]
+    async fn e2e_admin_auth_and_public_ingress_behavior() {
+        init_deno_platform();
+
+        let admin_probe = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("failed to bind admin probe listener");
+        let admin_addr = admin_probe
+            .local_addr()
+            .expect("failed to get admin local addr");
+        drop(admin_probe);
+
+        let ingress_probe = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("failed to bind ingress probe listener");
+        let ingress_addr = ingress_probe
+            .local_addr()
+            .expect("failed to get ingress local addr");
+        drop(ingress_probe);
+
+        let registry = make_test_registry();
+        let shutdown = CancellationToken::new();
+
+        let hello_eszip = build_eszip_async(
+            "file:///auth_e2e.ts",
+            r#"
+            Deno.serve(async () => new Response("auth-ok"));
+            "#,
+        )
+        .await;
+
+        let server_config = DualServerConfig {
+            admin: AdminListenerConfig {
+                addr: admin_addr,
+                api_key: Some("secret-key".to_string()),
+                tls: None,
+                body_limits: BodyLimitsConfig::default(),
+                bundle_signature: BundleSignatureConfig {
+                    required: false,
+                    public_key_path: None,
+                },
+            },
+            ingress: IngressListenerConfig {
+                listener_type: IngressListenerType::Tcp(ingress_addr),
+                tls: None,
+                rate_limit_rps: None,
+                body_limits: BodyLimitsConfig::default(),
+            },
+            graceful_exit_deadline_secs: 1,
+            max_connections: 128,
+        };
+
+        let server_shutdown = shutdown.clone();
+        let registry_for_server = registry.clone();
+        let server_handle = tokio::spawn(async move {
+            run_dual_server(server_config, registry_for_server, server_shutdown).await
+        });
+
+        tokio::time::sleep(Duration::from_millis(120)).await;
+
+        let body = bincode::serialize(&BundlePackage::eszip_only(hello_eszip))
+            .expect("serialize bundle package");
+
+        let req_no_key_head = format!(
+            "POST /_internal/functions HTTP/1.1\r\nHost: localhost\r\nx-function-name: auth-e2e\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let resp_no_key = send_plain_http_bytes(admin_addr, &req_no_key_head, &body).await;
+        assert!(
+            resp_no_key.starts_with("HTTP/1.1 401"),
+            "expected 401 without API key: {resp_no_key}"
+        );
+
+        let req_wrong_key_head = format!(
+            "POST /_internal/functions HTTP/1.1\r\nHost: localhost\r\nx-function-name: auth-e2e\r\nX-API-Key: wrong-key\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let resp_wrong_key = send_plain_http_bytes(admin_addr, &req_wrong_key_head, &body).await;
+        assert!(
+            resp_wrong_key.starts_with("HTTP/1.1 401"),
+            "expected 401 with wrong API key: {resp_wrong_key}"
+        );
+
+        let req_ok_key_head = format!(
+            "POST /_internal/functions HTTP/1.1\r\nHost: localhost\r\nx-function-name: auth-e2e\r\nX-API-Key: secret-key\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let resp_ok_key = send_plain_http_bytes(admin_addr, &req_ok_key_head, &body).await;
+        assert!(
+            resp_ok_key.starts_with("HTTP/1.1 200") || resp_ok_key.starts_with("HTTP/1.1 201"),
+            "expected success with correct API key: {resp_ok_key}"
+        );
+
+        let ingress_req = "GET /auth-e2e HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+        let ingress_resp = send_plain_http(ingress_addr, ingress_req).await;
+        assert!(
+            ingress_resp.starts_with("HTTP/1.1 200"),
+            "expected public ingress request without API key to work: {ingress_resp}"
+        );
+
+        shutdown.cancel();
+        let server_result = tokio::time::timeout(Duration::from_secs(3), server_handle)
+            .await
+            .expect("server task did not finish in time")
+            .expect("server join error");
+        server_result.expect("server returned error");
+    }
+
+    #[tokio::test]
+    async fn e2e_connection_limit_drops_excess_connections() {
+        init_deno_platform();
+
+        let probe_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("failed to bind probe listener");
+        let addr = probe_listener
+            .local_addr()
+            .expect("failed to get local addr");
+        drop(probe_listener);
+
+        let registry = make_test_registry();
+        let shutdown = CancellationToken::new();
+
+        let server_config = ServerConfig {
+            addr,
+            tls: None,
+            rate_limit_rps: None,
+            graceful_exit_deadline_secs: 1,
+            body_limits: BodyLimitsConfig::default(),
+            max_connections: 1,
+        };
+
+        let server_shutdown = shutdown.clone();
+        let server_handle = tokio::spawn(async move { run_server(server_config, registry, server_shutdown).await });
+
+        tokio::time::sleep(Duration::from_millis(120)).await;
+
+        // Occupy the only permit with a slow request.
+        let mut held = TcpStream::connect(addr)
+            .await
+            .expect("failed to connect held request");
+        held.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n")
+            .await
+            .expect("failed to write partial request");
+
+        // Second connection should be dropped by connection limiter.
+        let mut second = TcpStream::connect(addr)
+            .await
+            .expect("failed to connect second request");
+        second
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .expect("failed to write second request");
+        let mut buf = [0_u8; 128];
+        let second_read = tokio::time::timeout(Duration::from_millis(300), second.read(&mut buf))
+            .await
+            .expect("timed out reading second connection");
+        match second_read {
+            Ok(0) => {
+                // EOF: server closed socket immediately.
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::ConnectionReset => {
+                // Also valid: kernel reset because server dropped connection abruptly.
+            }
+            Ok(n) => {
+                panic!("expected dropped second connection, received {n} bytes");
+            }
+            Err(err) => {
+                panic!("unexpected second connection read error: {err}");
+            }
+        }
+
+        // Finish first request so server can respond.
+        held.write_all(b"Connection: close\r\n\r\n")
+            .await
+            .expect("failed to complete held request");
+        let mut held_response = Vec::new();
+        let held_n = tokio::time::timeout(Duration::from_secs(2), held.read_to_end(&mut held_response))
+            .await
+            .expect("timed out waiting held response")
+            .expect("failed to read held response");
+        assert!(held_n > 0, "expected held request to eventually complete");
+
+        shutdown.cancel();
+        let server_result = tokio::time::timeout(Duration::from_secs(3), server_handle)
+            .await
+            .expect("server task did not finish in time")
+            .expect("server join error");
+        server_result.expect("server returned error");
+    }
+
+    #[tokio::test]
+    #[ignore = "stress test: opens 20k connections and may exceed local CI resource limits"]
+    async fn stress_20k_connections_excess_are_dropped() {
+        init_deno_platform();
+
+        let probe_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("failed to bind probe listener");
+        let addr = probe_listener
+            .local_addr()
+            .expect("failed to get local addr");
+        drop(probe_listener);
+
+        let registry = make_test_registry();
+        let shutdown = CancellationToken::new();
+
+        let server_config = ServerConfig {
+            addr,
+            tls: None,
+            rate_limit_rps: None,
+            graceful_exit_deadline_secs: 1,
+            body_limits: BodyLimitsConfig::default(),
+            max_connections: 10_000,
+        };
+
+        let server_shutdown = shutdown.clone();
+        let server_handle = tokio::spawn(async move { run_server(server_config, registry, server_shutdown).await });
+
+        tokio::time::sleep(Duration::from_millis(120)).await;
+
+        let mut tasks = Vec::with_capacity(20_000);
+        for _ in 0..20_000usize {
+            tasks.push(tokio::spawn(async move {
+                match TcpStream::connect(addr).await {
+                    Ok(mut stream) => {
+                        let _ = stream.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").await;
+                        let mut buf = [0_u8; 64];
+                        let _ = tokio::time::timeout(Duration::from_millis(200), stream.read(&mut buf)).await;
+                        true
+                    }
+                    Err(_) => false,
+                }
+            }));
+        }
+
+        let mut connected = 0usize;
+        for task in tasks {
+            if task.await.expect("join failed") {
+                connected += 1;
+            }
+        }
+
+        assert!(connected > 0, "at least some connections should succeed");
+
+        // After stress, server should still answer.
+        let probe = send_plain_http(addr, "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").await;
+        assert!(probe.starts_with("HTTP/1.1"), "server did not respond after stress: {probe}");
 
         shutdown.cancel();
         let server_result = tokio::time::timeout(Duration::from_secs(3), server_handle)

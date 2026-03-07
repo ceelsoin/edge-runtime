@@ -515,6 +515,127 @@ fn test_panic_followed_by_request_marks_error_and_fails_fast() {
     assert!(result.is_ok(), "test failed: {:?}", result.err());
 }
 
+/// Test roadmap 4.4 requirement: panic transitions to Error and then auto-restart
+/// returns the function to Running state with successful request handling.
+#[test]
+#[ignore = "known gap: panic auto-restart recovery is not yet stable after channel teardown"]
+fn test_panic_auto_restart_recovers_to_running() {
+    deno_core::JsRuntime::init_platform(None);
+
+    let eszip_bytes = build_eszip(
+        "file:///test_panic_auto_restart.js",
+        r#"
+        Deno.serve(async (_req) => {
+            return new Response("ok-after-restart");
+        });
+        "#,
+    );
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let result: Result<(), String> = rt.block_on(async {
+        std::env::set_var("EDGE_RUNTIME_TEST_PANIC_ON_PATH", "/panic-once-restart");
+
+        let bundle = BundlePackage::eszip_only(eszip_bytes);
+        let bundle_data =
+            bincode::serialize(&bundle).map_err(|e| format!("serialize bundle: {e}"))?;
+
+        let registry = FunctionRegistry::new(CancellationToken::new(), IsolateConfig::default());
+        let _ = registry
+            .deploy(
+                "panic-auto-restart-test".to_string(),
+                bytes::Bytes::from(bundle_data),
+                None,
+                None,
+            )
+            .await
+            .map_err(|e| format!("deploy: {e}"))?;
+
+        // Trigger panic once.
+        let panic_handle = registry
+            .get_handle("panic-auto-restart-test")
+            .ok_or_else(|| "missing handle after deploy".to_string())?;
+        let panic_req = http::Request::builder()
+            .method("GET")
+            .uri("/panic-once-restart")
+            .header("host", "localhost:9000")
+            .body(bytes::Bytes::new())
+            .map_err(|e| format!("build panic request: {e}"))?;
+        let first = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            panic_handle.send_request(panic_req),
+        )
+        .await
+        .map_err(|_| "timed out waiting panic request result".to_string())?;
+        if first.is_ok() {
+            return Err("expected panic request to fail".to_string());
+        }
+
+        std::env::remove_var("EDGE_RUNTIME_TEST_PANIC_ON_PATH");
+
+        // We expect transient Error and then recovery to Running after backoff.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+        let mut saw_error = false;
+        let mut recovered = false;
+
+        while std::time::Instant::now() < deadline {
+            if let Some(info) = registry.get_info("panic-auto-restart-test") {
+                if info.status == FunctionStatus::Error {
+                    saw_error = true;
+                }
+            }
+
+            if let Some(handle) = registry.get_handle("panic-auto-restart-test") {
+                let req = http::Request::builder()
+                    .method("GET")
+                    .uri("/healthy")
+                    .header("host", "localhost:9000")
+                    .body(bytes::Bytes::new())
+                    .map_err(|e| format!("build healthy request: {e}"))?;
+
+                if let Ok(resp) = handle.send_request(req).await {
+                    if resp.parts.status == 200 {
+                        recovered = true;
+                        break;
+                    }
+                }
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+
+        if !saw_error {
+            return Err("did not observe Error state after panic".to_string());
+        }
+        if !recovered {
+            return Err("isolate did not recover to Running within deadline".to_string());
+        }
+
+        let info_after = registry
+            .get_info("panic-auto-restart-test")
+            .ok_or_else(|| "missing function info after recovery".to_string())?;
+        if info_after.status != FunctionStatus::Running {
+            return Err(format!(
+                "expected Running status after auto-restart, got {:?}",
+                info_after.status
+            ));
+        }
+
+        registry
+            .delete("panic-auto-restart-test")
+            .await
+            .map_err(|e| format!("delete function: {e}"))?;
+
+        Ok(())
+    });
+
+    std::env::remove_var("EDGE_RUNTIME_TEST_PANIC_ON_PATH");
+    assert!(result.is_ok(), "test failed: {:?}", result.err());
+}
+
 /// Test roadmap 2.2 requirement: graceful shutdown with request in-flight.
 #[test]
 fn test_graceful_shutdown_with_in_flight_request() {

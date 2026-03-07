@@ -464,19 +464,19 @@ Implementacao atual:
 > Testes específicos que devem existir para validar as correções acima e prevenir regressões.
 
 ### 4.1 Testes de Sandbox
-- [ ] `fetch("http://127.0.0.1:...")` → bloqueado
-- [ ] `fetch("http://169.254.169.254/...")` → bloqueado
-- [ ] `fetch("https://httpbin.org/get")` → permitido
-- [ ] `Deno.readFile("...")` → não existe / permission denied
-- [ ] `Deno.env.get("...")` → não existe / permission denied
-- [ ] Prototype pollution via `Object.prototype.__proto__` → sem efeito
+- [x] `fetch("http://127.0.0.1:...")` → bloqueado
+- [x] `fetch("http://169.254.169.254/...")` → bloqueado
+- [x] `fetch("https://httpbin.org/get")` → permitido
+- [x] `Deno.readFile("...")` → não existe / permission denied
+- [x] `Deno.env.get("...")` → não existe / permission denied
+- [x] Prototype pollution via `Object.prototype.__proto__` → sem efeito
 
 ### 4.2 Testes de Resource Limits
 - [x] Teste de término forçado de execução com `while(true){}` (via `terminate_execution`)
-- [ ] Handler com `while(true){}` → timeout 504
-- [ ] Handler que aloca 1GB → heap limit / OOM kill
+- [x] Handler com `while(true){}` → timeout 504
+- [x] Handler que aloca 1GB → heap limit / OOM kill
 - [x] Request body oversized → 413 Payload Too Large
-- [ ] 20.000 conexões simultâneas → conexões excedentes dropadas
+- [x] 20.000 conexões simultâneas → conexões excedentes dropadas
 
 ### 4.3 Testes de Auth
 - [x] `POST /_internal/functions` sem API key → 401
@@ -486,8 +486,14 @@ Implementacao atual:
 
 ### 4.4 Testes de Resiliência
 - [ ] Isolate panic → status muda para Error → auto-restart
-- [ ] Shutdown com request in-flight → request completa ou recebe erro
-- [ ] Deploy de bundle corrompido → erro 400, não crash
+- [x] Shutdown com request in-flight → request completa ou recebe erro
+- [x] Deploy de bundle corrompido → erro 400, não crash
+
+Notas de cobertura:
+- Testes de sandbox adicionados em `crates/functions/tests/sandbox_security.rs`.
+- Stress de `20.000` conexões foi adicionado como teste `#[ignore]` em `crates/server/src/lib.rs` (`stress_20k_connections_excess_are_dropped`) para evitar flakiness em ambientes com limite de recursos. O comportamento de drop também é validado por teste rápido não-ignorado (`e2e_connection_limit_drops_excess_connections`).
+- Auth da fase 4.3 agora também possui cobertura E2E em `crates/server/src/lib.rs` (`e2e_admin_auth_and_public_ingress_behavior`) para `POST /_internal/functions` sem key, key inválida, key válida e `GET /{function}/` público sem key.
+- Auto-restart após panic permanece pendente: já existe validação de transição para `Error` e fail-fast, e há teste dedicado marcado `#[ignore]` em `crates/functions/tests/timeout_and_timers.rs` (`test_panic_auto_restart_recovers_to_running`) até estabilizar a recuperação automática.
 
 ---
 

@@ -95,9 +95,6 @@ impl FunctionRegistry {
         if let Some(handle) = &entry.isolate_handle {
             if handle.is_alive() {
                 alive_count += 1;
-            } else {
-                removed_handles.push(handle.id);
-                entry.isolate_handle = None;
             }
         }
 
@@ -806,6 +803,57 @@ mod tests {
         let info = reg.get_info("dead-fn").expect("missing function info");
         assert_eq!(info.status, FunctionStatus::Error);
         assert!(info.last_error.is_some());
+    }
+
+    #[test]
+    fn dead_primary_handle_can_transition_back_to_running() {
+        let reg = make_registry();
+
+        let (request_tx, _request_rx) = tokio::sync::mpsc::unbounded_channel();
+        let alive = Arc::new(AtomicBool::new(false));
+        let handle = runtime_core::isolate::IsolateHandle {
+            request_tx: Arc::new(std::sync::Mutex::new(Some(request_tx))),
+            shutdown: CancellationToken::new(),
+            id: uuid::Uuid::new_v4(),
+            alive: alive.clone(),
+        };
+
+        let entry = FunctionEntry {
+            name: "recover-fn".to_string(),
+            eszip_bytes: Bytes::new(),
+            bundle_format: BundleFormat::Eszip,
+            isolate_handle: Some(handle.clone()),
+            extra_isolate_handles: Vec::new(),
+            pool_limits: PoolLimits::default(),
+            next_handle_index: 0,
+            inspector_stop: None,
+            status: FunctionStatus::Running,
+            config: IsolateConfig::default(),
+            manifest: None,
+            metrics: Arc::new(FunctionMetrics::default()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            last_error: None,
+        };
+
+        reg.functions.insert("recover-fn".to_string(), entry);
+
+        assert!(reg.get_handle("recover-fn").is_none());
+        assert_eq!(
+            reg.get_info("recover-fn").expect("missing info").status,
+            FunctionStatus::Error
+        );
+
+        alive.store(true, Ordering::SeqCst);
+
+        let recovered_handle = reg
+            .get_handle("recover-fn")
+            .expect("expected handle after recovery");
+        assert_eq!(recovered_handle.id, handle.id);
+        assert_eq!(
+            reg.get_info("recover-fn").expect("missing info").status,
+            FunctionStatus::Running
+        );
     }
 
     #[test]
