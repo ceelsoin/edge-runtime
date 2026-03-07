@@ -259,6 +259,7 @@ fn test_isolate_timeout_returns_504() {
             "timeout-504-test".to_string(),
             bundle_data,
             config,
+            runtime_core::isolate::OutgoingProxyConfig::default(),
             None,
             CancellationToken::new(),
         )

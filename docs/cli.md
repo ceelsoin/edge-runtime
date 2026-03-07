@@ -141,6 +141,15 @@ These are consumed mainly by `start` and `watch`:
 - `EDGE_RUNTIME_DISABLE_SSRF_PROTECTION`
 - `EDGE_RUNTIME_ALLOW_PRIVATE_NET`
 
+**Outgoing Proxy:**
+- Runtime-scoped (process-wide): applies to all function isolates in the running runtime.
+- `EDGE_RUNTIME_HTTP_OUTGOING_PROXY`
+- `EDGE_RUNTIME_HTTPS_OUTGOING_PROXY`
+- `EDGE_RUNTIME_TCP_OUTGOING_PROXY`
+- `EDGE_RUNTIME_HTTP_NO_PROXY`
+- `EDGE_RUNTIME_HTTPS_NO_PROXY`
+- `EDGE_RUNTIME_TCP_NO_PROXY`
+
 **Body Size Limits:**
 - `EDGE_RUNTIME_MAX_REQUEST_BODY_SIZE`
 - `EDGE_RUNTIME_MAX_RESPONSE_BODY_SIZE`
@@ -261,6 +270,27 @@ thunder start [OPTIONS]
   - Example: `--allow-private-net "10.1.0.0/16,10.2.0.0/16"`
   - Useful for corporate networks or internal services.
   - Env: `EDGE_RUNTIME_ALLOW_PRIVATE_NET`
+
+- `--http-outgoing-proxy <URL>`
+  - Outgoing proxy for HTTP requests.
+  - Examples: `http://proxy.local:8080`, `socks5://proxy.local:1080`
+  - Env: `EDGE_RUNTIME_HTTP_OUTGOING_PROXY`
+- `--https-outgoing-proxy <URL>`
+  - Outgoing proxy for HTTPS requests.
+  - Examples: `http://proxy.local:8080`, `socks5://proxy.local:1080`
+  - Env: `EDGE_RUNTIME_HTTPS_OUTGOING_PROXY`
+- `--tcp-outgoing-proxy <HOST:PORT|tcp://HOST:PORT>`
+  - Generic TCP transport proxy used for outgoing egress.
+  - Env: `EDGE_RUNTIME_TCP_OUTGOING_PROXY`
+- `--http-no-proxy <HOST,...>`
+  - Comma-separated bypass list for HTTP proxy.
+  - Env: `EDGE_RUNTIME_HTTP_NO_PROXY`
+- `--https-no-proxy <HOST,...>`
+  - Comma-separated bypass list for HTTPS proxy.
+  - Env: `EDGE_RUNTIME_HTTPS_NO_PROXY`
+- `--tcp-no-proxy <HOST,...>`
+  - Comma-separated bypass list for TCP proxy.
+  - Env: `EDGE_RUNTIME_TCP_NO_PROXY`
 
 - `--require-bundle-signature`
   - Require Ed25519 signature verification for function deploy/update payloads on admin API.

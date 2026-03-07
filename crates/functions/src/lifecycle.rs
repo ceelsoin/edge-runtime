@@ -3,6 +3,7 @@ use std::net::TcpListener;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
@@ -23,6 +24,7 @@ use runtime_core::cpu_timer::CpuTimer;
 use runtime_core::extensions;
 use runtime_core::isolate::{
     determine_root_specifier, IsolateConfig, IsolateHandle, IsolateRequest, IsolateResponse,
+    OutgoingProxyConfig,
 };
 use runtime_core::isolate_logs::IsolateLogConfig;
 use runtime_core::manifest::ResolvedFunctionManifest;
@@ -58,6 +60,53 @@ fn timeout_response() -> IsolateResponse {
     IsolateResponse::from_full_response(response)
 }
 
+fn set_env_var_pair(name_upper: &str, value: Option<&str>) {
+    let name_lower = name_upper.to_ascii_lowercase();
+    match value {
+        Some(v) if !v.trim().is_empty() => {
+            std::env::set_var(name_upper, v);
+            std::env::set_var(name_lower, v);
+        }
+        _ => {
+            std::env::remove_var(name_upper);
+            std::env::remove_var(&name_lower);
+        }
+    }
+}
+
+fn apply_outgoing_proxy_env(config: &runtime_core::isolate::OutgoingProxyConfig) {
+    static PROXY_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let lock = PROXY_ENV_LOCK.get_or_init(|| Mutex::new(()));
+    let _guard = lock.lock().expect("proxy env lock poisoned");
+
+    set_env_var_pair("HTTP_PROXY", config.http_proxy.as_deref());
+    set_env_var_pair("HTTPS_PROXY", config.https_proxy.as_deref());
+    set_env_var_pair("ALL_PROXY", config.tcp_proxy.as_deref());
+
+    let mut merged_no_proxy: Vec<String> = Vec::new();
+    for entry in config
+        .http_no_proxy
+        .iter()
+        .chain(config.https_no_proxy.iter())
+        .chain(config.tcp_no_proxy.iter())
+    {
+        let item = entry.trim();
+        if item.is_empty() {
+            continue;
+        }
+        if !merged_no_proxy.iter().any(|existing| existing == item) {
+            merged_no_proxy.push(item.to_string());
+        }
+    }
+
+    if merged_no_proxy.is_empty() {
+        set_env_var_pair("NO_PROXY", None);
+    } else {
+        let joined = merged_no_proxy.join(",");
+        set_env_var_pair("NO_PROXY", Some(&joined));
+    }
+}
+
 async fn parse_eszip_bundle(
     eszip_bytes: Vec<u8>,
 ) -> Result<(Arc<eszip::EszipV2>, deno_core::ModuleSpecifier), Error> {
@@ -87,6 +136,7 @@ pub async fn create_function(
     name: String,
     bundle_data: Vec<u8>,
     config: IsolateConfig,
+    outgoing_proxy: OutgoingProxyConfig,
     manifest: Option<ResolvedFunctionManifest>,
     parent_shutdown: CancellationToken,
 ) -> Result<FunctionEntry, Error> {
@@ -143,6 +193,7 @@ pub async fn create_function(
     let isolate_config = config.clone();
     let isolate_manifest = manifest.clone();
     let isolate_metrics = metrics.clone();
+    let isolate_outgoing_proxy = outgoing_proxy.clone();
     let bundle_format = bundle_package.format;
     let snapshot_bytes = if bundle_package.format == BundleFormat::Snapshot {
         Some(bundle_package.bundle.clone())
@@ -180,6 +231,7 @@ pub async fn create_function(
                                 eszip,
                                 root_specifier,
                                 isolate_config.clone(),
+                                isolate_outgoing_proxy.clone(),
                                 isolate_manifest.clone(),
                                 &mut request_rx,
                                 shutdown.clone(),
@@ -287,6 +339,7 @@ async fn run_isolate(
     eszip: Arc<eszip::EszipV2>,
     root_specifier: deno_core::ModuleSpecifier,
     config: IsolateConfig,
+    outgoing_proxy: OutgoingProxyConfig,
     manifest: Option<ResolvedFunctionManifest>,
     request_rx: &mut mpsc::UnboundedReceiver<IsolateRequest>,
     shutdown: CancellationToken,
@@ -314,6 +367,7 @@ async fn run_isolate(
                                 &eszip,
                                 &root_specifier,
                                 &config,
+                                &outgoing_proxy,
                                 manifest.as_ref(),
                                 &name,
                             )
@@ -326,6 +380,7 @@ async fn run_isolate(
                         &eszip,
                         &root_specifier,
                         &config,
+                        &outgoing_proxy,
                         manifest.as_ref(),
                         &name,
                     )
@@ -341,6 +396,7 @@ async fn run_isolate(
                     &eszip,
                     &root_specifier,
                     &config,
+                    &outgoing_proxy,
                     manifest.as_ref(),
                     &name,
                 )
@@ -348,8 +404,15 @@ async fn run_isolate(
             }
         }
         BundleFormat::Eszip => {
-            load_from_eszip_with_init(&eszip, &root_specifier, &config, manifest.as_ref(), &name)
-                .await?
+            load_from_eszip_with_init(
+                &eszip,
+                &root_specifier,
+                &config,
+                &outgoing_proxy,
+                manifest.as_ref(),
+                &name,
+            )
+            .await?
         }
     };
 
@@ -673,9 +736,12 @@ async fn load_from_eszip_with_init(
     eszip: &Arc<eszip::EszipV2>,
     root_specifier: &deno_core::ModuleSpecifier,
     config: &IsolateConfig,
+    outgoing_proxy: &OutgoingProxyConfig,
     manifest: Option<&ResolvedFunctionManifest>,
     function_name: &str,
 ) -> Result<(JsRuntime, Option<*mut HeapLimitState>), Error> {
+    apply_outgoing_proxy_env(outgoing_proxy);
+
     // Set up V8 heap limits
     let create_params = if config.max_heap_size_bytes > 0 {
         Some(deno_core::v8::CreateParams::default().heap_limits(0, config.max_heap_size_bytes))

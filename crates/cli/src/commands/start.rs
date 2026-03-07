@@ -8,7 +8,7 @@ use tracing::info;
 
 use functions::registry::{FunctionRegistry, PoolRuntimeConfig};
 use functions::types::PoolLimits;
-use runtime_core::isolate::IsolateConfig;
+use runtime_core::isolate::{IsolateConfig, OutgoingProxyConfig};
 use runtime_core::ssrf::SsrfConfig;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -92,6 +92,30 @@ pub struct StartArgs {
     /// Example: --allow-private-net "10.1.0.0/16,10.2.0.0/16"
     #[arg(long, value_delimiter = ',', env = "EDGE_RUNTIME_ALLOW_PRIVATE_NET")]
     allow_private_net: Vec<String>,
+
+    /// Outgoing HTTP proxy URL (eg. http://proxy.local:8080, socks5://proxy.local:1080)
+    #[arg(long, env = "EDGE_RUNTIME_HTTP_OUTGOING_PROXY")]
+    http_outgoing_proxy: Option<String>,
+
+    /// Outgoing HTTPS proxy URL (eg. http://proxy.local:8080, socks5://proxy.local:1080)
+    #[arg(long, env = "EDGE_RUNTIME_HTTPS_OUTGOING_PROXY")]
+    https_outgoing_proxy: Option<String>,
+
+    /// Outgoing TCP proxy endpoint (host:port or tcp://host:port)
+    #[arg(long, env = "EDGE_RUNTIME_TCP_OUTGOING_PROXY")]
+    tcp_outgoing_proxy: Option<String>,
+
+    /// Bypass list for HTTP proxy (comma-separated hosts/domains)
+    #[arg(long, value_delimiter = ',', env = "EDGE_RUNTIME_HTTP_NO_PROXY")]
+    http_no_proxy: Vec<String>,
+
+    /// Bypass list for HTTPS proxy (comma-separated hosts/domains)
+    #[arg(long, value_delimiter = ',', env = "EDGE_RUNTIME_HTTPS_NO_PROXY")]
+    https_no_proxy: Vec<String>,
+
+    /// Bypass list for TCP proxy (comma-separated hosts/domains)
+    #[arg(long, value_delimiter = ',', env = "EDGE_RUNTIME_TCP_NO_PROXY")]
+    tcp_no_proxy: Vec<String>,
 
     // ─────────────────────────────────────────────────────────────────────────
     // Body Size Limits
@@ -230,14 +254,24 @@ pub fn run(args: StartArgs) -> Result<(), anyhow::Error> {
             print_isolate_logs: args.print_isolate_logs,
         };
 
+        let pool_config = PoolRuntimeConfig {
+            enabled: args.pool_enabled,
+            global_max_isolates: args.pool_global_max_isolates,
+            min_free_memory_mib: args.pool_min_free_memory_mib,
+            outgoing_proxy: OutgoingProxyConfig {
+                http_proxy: args.http_outgoing_proxy,
+                https_proxy: args.https_outgoing_proxy,
+                tcp_proxy: args.tcp_outgoing_proxy,
+                http_no_proxy: args.http_no_proxy,
+                https_no_proxy: args.https_no_proxy,
+                tcp_no_proxy: args.tcp_no_proxy,
+            },
+        };
+
         let registry = Arc::new(FunctionRegistry::new_with_pool(
             shutdown.clone(),
             default_config,
-            PoolRuntimeConfig {
-                enabled: args.pool_enabled,
-                global_max_isolates: args.pool_global_max_isolates,
-                min_free_memory_mib: args.pool_min_free_memory_mib,
-            },
+            pool_config,
             PoolLimits::default(),
         ));
 

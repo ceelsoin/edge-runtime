@@ -11,6 +11,23 @@ use uuid::Uuid;
 
 use crate::ssrf::SsrfConfig;
 
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutgoingProxyConfig {
+    #[serde(default)]
+    pub http_proxy: Option<String>,
+    #[serde(default)]
+    pub https_proxy: Option<String>,
+    #[serde(default)]
+    pub tcp_proxy: Option<String>,
+    #[serde(default)]
+    pub http_no_proxy: Vec<String>,
+    #[serde(default)]
+    pub https_no_proxy: Vec<String>,
+    #[serde(default)]
+    pub tcp_no_proxy: Vec<String>,
+}
+
 /// Configuration for creating a new function isolate.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct IsolateConfig {

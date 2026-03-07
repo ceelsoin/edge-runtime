@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use url::Url;
 
-use runtime_core::isolate::IsolateConfig;
+use runtime_core::isolate::{IsolateConfig, OutgoingProxyConfig};
 
 use super::embedded_assert;
 
@@ -60,6 +60,30 @@ pub struct WatchArgs {
         env = "EDGE_RUNTIME_PRINT_ISOLATE_LOGS"
     )]
     print_isolate_logs: bool,
+
+    /// Outgoing HTTP proxy URL (eg. http://proxy.local:8080, socks5://proxy.local:1080)
+    #[arg(long, env = "EDGE_RUNTIME_HTTP_OUTGOING_PROXY")]
+    http_outgoing_proxy: Option<String>,
+
+    /// Outgoing HTTPS proxy URL (eg. http://proxy.local:8080, socks5://proxy.local:1080)
+    #[arg(long, env = "EDGE_RUNTIME_HTTPS_OUTGOING_PROXY")]
+    https_outgoing_proxy: Option<String>,
+
+    /// Outgoing TCP proxy endpoint (host:port or tcp://host:port)
+    #[arg(long, env = "EDGE_RUNTIME_TCP_OUTGOING_PROXY")]
+    tcp_outgoing_proxy: Option<String>,
+
+    /// Bypass list for HTTP proxy (comma-separated hosts/domains)
+    #[arg(long, value_delimiter = ',', env = "EDGE_RUNTIME_HTTP_NO_PROXY")]
+    http_no_proxy: Vec<String>,
+
+    /// Bypass list for HTTPS proxy (comma-separated hosts/domains)
+    #[arg(long, value_delimiter = ',', env = "EDGE_RUNTIME_HTTPS_NO_PROXY")]
+    https_no_proxy: Vec<String>,
+
+    /// Bypass list for TCP proxy (comma-separated hosts/domains)
+    #[arg(long, value_delimiter = ',', env = "EDGE_RUNTIME_TCP_NO_PROXY")]
+    tcp_no_proxy: Vec<String>,
 
     /// Enable V8 inspector protocol in watch mode (optional base port, default: 9229)
     ///
@@ -174,9 +198,11 @@ pub fn run(args: WatchArgs) -> Result<(), anyhow::Error> {
             }
         }
 
-        let registry = Arc::new(functions::registry::FunctionRegistry::new(
+        let registry = Arc::new(functions::registry::FunctionRegistry::new_with_pool(
             shutdown.clone(),
             default_config.clone(),
+            build_watch_pool_config(&args),
+            functions::types::PoolLimits::default(),
         ));
 
         crate::telemetry::spawn_isolate_log_exporter(
@@ -521,6 +547,22 @@ fn build_watch_default_config(args: &WatchArgs) -> IsolateConfig {
     }
 }
 
+fn build_watch_pool_config(args: &WatchArgs) -> functions::registry::PoolRuntimeConfig {
+    functions::registry::PoolRuntimeConfig {
+        enabled: false,
+        global_max_isolates: 1024,
+        min_free_memory_mib: 256,
+        outgoing_proxy: OutgoingProxyConfig {
+            http_proxy: args.http_outgoing_proxy.clone(),
+            https_proxy: args.https_outgoing_proxy.clone(),
+            tcp_proxy: args.tcp_outgoing_proxy.clone(),
+            http_no_proxy: args.http_no_proxy.clone(),
+            https_no_proxy: args.https_no_proxy.clone(),
+            tcp_no_proxy: args.tcp_no_proxy.clone(),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -539,6 +581,12 @@ mod tests {
             inspect_brk: false,
             inspect_allow_remote: false,
             print_isolate_logs: true,
+            http_outgoing_proxy: None,
+            https_outgoing_proxy: None,
+            tcp_outgoing_proxy: None,
+            http_no_proxy: vec![],
+            https_no_proxy: vec![],
+            tcp_no_proxy: vec![],
         };
 
         let cfg = build_watch_default_config(&args);

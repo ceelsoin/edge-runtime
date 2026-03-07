@@ -3,7 +3,7 @@
 > Baseado na auditoria de segurança e arquitetura realizada em 05/03/2026.
 > Cada item referencia o finding correspondente no `AUDIT.md`.
 >
-> Última atualização: 06/03/2026 (TLS 0.1 concluída + base em `git log` + `git diff`).
+> Última atualização: 07/03/2026 (item 3.9 concluído: proxy de saída em escopo global de runtime).
 > Commits de referência: `92aa473`, `6607a2b`, `4933dda`.
 > Inclui também mudanças locais ainda não commitadas em `functions/runtime-core`.
 
@@ -461,20 +461,28 @@ Implementacao atual:
 
 **Objetivo:** suportar proxy de saida para trafego HTTP, HTTPS e TCP com bypass configuravel por protocolo.
 
-- [ ] Adicionar suporte a proxy HTTP de saida
-- [ ] Adicionar suporte a proxy HTTPS de saida
-- [ ] Adicionar suporte a proxy TCP de saida
-- [ ] Adicionar configuracao `no-proxy` para HTTP
-- [ ] Adicionar configuracao `no-proxy` para HTTPS
-- [ ] Adicionar configuracao `no-proxy` para TCP
-- [ ] Expor configuracao via CLI e env vars dedicadas
-- [ ] Garantir compatibilidade com regras SSRF e allowlists existentes
-- [ ] Adicionar testes de integracao para:
-    - [ ] rota com proxy habilitado
-    - [ ] rota em `no-proxy` (bypass)
-    - [ ] fallback quando proxy indisponivel (erro claro)
+- [x] Adicionar suporte a proxy HTTP de saida
+- [x] Adicionar suporte a proxy HTTPS de saida
+- [x] Adicionar suporte a proxy TCP de saida
+- [x] Adicionar configuracao `no-proxy` para HTTP
+- [x] Adicionar configuracao `no-proxy` para HTTPS
+- [x] Adicionar configuracao `no-proxy` para TCP
+- [x] Expor configuracao via CLI e env vars dedicadas
+- [x] Garantir compatibilidade com regras SSRF e allowlists existentes
+- [x] Adicionar testes de integracao para:
+    - [x] rota com proxy habilitado
+    - [x] rota em `no-proxy` (bypass)
+    - [x] fallback quando proxy indisponivel (erro claro)
 
 **Critério de aceite:** requests e conexoes de saida usam proxy por protocolo quando configurado e respeitam `no-proxy` sem regressao de seguranca.
+
+**Status:** ✅ Concluído
+
+Implementacao atual:
+- Configuracao de proxy em escopo global de runtime/processo (nao por isolate), via `PoolRuntimeConfig`.
+- Flags e env vars dedicadas no CLI (`start` e `watch`) para HTTP/HTTPS/TCP e respectivos `no-proxy`.
+- Aplicacao do proxy por variaveis de ambiente do runtime (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) para compatibilidade nativa com stack de rede.
+- Cobertura de integracao em `crates/functions/tests/outgoing_proxy.rs` com cenarios de proxy habilitado, bypass e proxy indisponivel.
 
 ---
 

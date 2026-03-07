@@ -1,7 +1,7 @@
 use anyhow::Error;
 use base64::Engine;
 use deno_core::{op2, Extension, JsRuntime, OpState};
-use runtime_core::isolate::{IsolateResponse, IsolateResponseBody};
+use runtime_core::isolate::{IsolateResponse, IsolateResponseBody, OutgoingProxyConfig};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -98,6 +98,21 @@ fn unregister_response_stream(js_runtime: &mut JsRuntime, stream_id: &str) {
 ///
 /// Or we can override `Deno.serve` to do this automatically.
 pub fn inject_request_bridge(js_runtime: &mut JsRuntime) -> Result<(), Error> {
+    inject_request_bridge_with_proxy(js_runtime, &OutgoingProxyConfig::default())
+}
+
+pub fn inject_request_bridge_with_proxy(
+    js_runtime: &mut JsRuntime,
+    outgoing_proxy: &OutgoingProxyConfig,
+) -> Result<(), Error> {
+    let proxy_json = serde_json::to_string(outgoing_proxy)
+        .map_err(|e| anyhow::anyhow!("failed to serialize outgoing proxy config: {e}"))?;
+    let set_proxy_config = format!("globalThis.__edgeRuntimeProxyConfig = {proxy_json};");
+    js_runtime.execute_script(
+        "edge-internal:///runtime_proxy_config.js",
+        set_proxy_config,
+    )?;
+
     js_runtime.execute_script(
         "edge-internal:///runtime_bridge.js",
         deno_core::ascii_str!(
@@ -115,6 +130,14 @@ pub fn inject_request_bridge(js_runtime: &mut JsRuntime) -> Result<(), Error> {
                 _abortRegistry: new Map(),       // executionId -> Set<AbortController>
                 _promiseRegistry: new Map(),     // executionId -> Set<{promise, reject}>
                 _lastBlockedNetworkLog: null,
+                _proxyConfig: globalThis.__edgeRuntimeProxyConfig || {
+                    httpProxy: null,
+                    httpsProxy: null,
+                    tcpProxy: null,
+                    httpNoProxy: [],
+                    httpsNoProxy: [],
+                    tcpNoProxy: [],
+                },
 
                 startExecution(executionId) {
                     this._currentExecutionId = executionId;
@@ -248,6 +271,60 @@ pub fn inject_request_bridge(js_runtime: &mut JsRuntime) -> Result<(), Error> {
                     this._lastBlockedNetworkLog = { target, message };
                     console.warn(`[thunder] blocked outbound request target='${target}' reason='${message}'`);
                 },
+
+                _listContainsHost(list, host) {
+                    if (!Array.isArray(list) || list.length === 0) return false;
+                    const normalizedHost = String(host || '').toLowerCase();
+                    for (const rawEntry of list) {
+                        const entry = String(rawEntry || '').trim().toLowerCase();
+                        if (!entry) continue;
+                        if (entry === '*') return true;
+                        if (entry.startsWith('.')) {
+                            const suffix = entry.slice(1);
+                            if (normalizedHost === suffix || normalizedHost.endsWith(entry)) {
+                                return true;
+                            }
+                        } else if (normalizedHost === entry || normalizedHost.endsWith(`.${entry}`)) {
+                            return true;
+                        }
+                    }
+                    return false;
+                },
+
+                _selectProxy(urlObj) {
+                    if (!(urlObj instanceof URL)) return null;
+                    const scheme = urlObj.protocol === 'https:' ? 'https' : (urlObj.protocol === 'http:' ? 'http' : null);
+                    if (!scheme) return null;
+
+                    const cfg = this._proxyConfig || {};
+                    let proxyKind = null;
+                    let proxyValue = null;
+                    let noProxyList = [];
+
+                    if (scheme === 'http' && cfg.httpProxy) {
+                        proxyKind = 'http';
+                        proxyValue = cfg.httpProxy;
+                        noProxyList = cfg.httpNoProxy || [];
+                    } else if (scheme === 'https' && cfg.httpsProxy) {
+                        proxyKind = 'http';
+                        proxyValue = cfg.httpsProxy;
+                        noProxyList = cfg.httpsNoProxy || [];
+                    } else if (cfg.tcpProxy) {
+                        proxyKind = 'tcp';
+                        proxyValue = cfg.tcpProxy;
+                        noProxyList = cfg.tcpNoProxy || [];
+                    }
+
+                    if (!proxyKind || !proxyValue) {
+                        return null;
+                    }
+
+                    if (this._listContainsHost(noProxyList, urlObj.hostname)) {
+                        return null;
+                    }
+
+                    return { proxyKind, proxyValue };
+                },
             };
 
             // Store original functions
@@ -320,9 +397,28 @@ pub fn inject_request_bridge(js_runtime: &mut JsRuntime) -> Result<(), Error> {
                 const execId = globalThis.__edgeRuntime._currentExecutionId;
 
                 const invokeFetch = (requestInput, requestInit) => {
+                    let proxySelection = null;
+                    let selectedUrl = null;
+                    try {
+                        const rawUrl = (typeof requestInput === 'string' || requestInput instanceof URL)
+                            ? requestInput
+                            : requestInput?.url;
+                        if (rawUrl) {
+                            selectedUrl = new URL(String(rawUrl));
+                            proxySelection = globalThis.__edgeRuntime._selectProxy(selectedUrl);
+                        }
+                    } catch (_) {
+                        // If URL parsing fails, fallback to original fetch path.
+                    }
+
                     return globalThis.__originalFetch(requestInput, requestInit).catch((error) => {
                         if (globalThis.__edgeRuntime._isBlockedNetworkError(error)) {
                             globalThis.__edgeRuntime._logBlockedNetworkRequest(requestInput, error);
+                        }
+                        if (proxySelection) {
+                            const reason = String(error?.message || error || 'unknown proxy error');
+                            const target = selectedUrl ? selectedUrl.toString() : globalThis.__edgeRuntime._requestTarget(requestInput);
+                            throw new Error(`[thunder] outgoing proxy request failed kind='${proxySelection.proxyKind}' target='${target}' reason='${reason}'`);
                         }
                         throw error;
                     });

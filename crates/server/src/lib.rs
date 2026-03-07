@@ -655,6 +655,7 @@ mod tests {
                 enabled: true,
                 global_max_isolates: 64,
                 min_free_memory_mib: 0,
+                outgoing_proxy: runtime_core::isolate::OutgoingProxyConfig::default(),
             },
             PoolLimits::default(),
         ))

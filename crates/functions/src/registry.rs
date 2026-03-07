@@ -9,6 +9,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use runtime_core::isolate::IsolateConfig;
+use runtime_core::isolate::OutgoingProxyConfig;
 use runtime_core::manifest::ResolvedFunctionManifest;
 
 use crate::lifecycle;
@@ -19,6 +20,7 @@ pub struct PoolRuntimeConfig {
     pub enabled: bool,
     pub global_max_isolates: usize,
     pub min_free_memory_mib: u64,
+    pub outgoing_proxy: OutgoingProxyConfig,
 }
 
 impl Default for PoolRuntimeConfig {
@@ -27,6 +29,7 @@ impl Default for PoolRuntimeConfig {
             enabled: false,
             global_max_isolates: 1024,
             min_free_memory_mib: 256,
+            outgoing_proxy: OutgoingProxyConfig::default(),
         }
     }
 }
@@ -297,6 +300,7 @@ impl FunctionRegistry {
             function_name.to_string(),
             eszip_bytes.to_vec(),
             config,
+            self.pool_config.outgoing_proxy.clone(),
             manifest,
             self.global_shutdown.child_token(),
         )
@@ -331,6 +335,7 @@ impl FunctionRegistry {
             name.clone(),
             eszip_bytes.to_vec(),
             config,
+            self.pool_config.outgoing_proxy.clone(),
             manifest,
             self.global_shutdown.child_token(),
         )
@@ -474,6 +479,7 @@ impl FunctionRegistry {
             name.to_string(),
             eszip_bytes.to_vec(),
             config,
+            self.pool_config.outgoing_proxy.clone(),
             manifest,
             self.global_shutdown.child_token(),
         )
@@ -537,6 +543,7 @@ impl FunctionRegistry {
             name.to_string(),
             eszip_bytes.to_vec(),
             config,
+            self.pool_config.outgoing_proxy.clone(),
             manifest,
             self.global_shutdown.child_token(),
         )
@@ -724,6 +731,7 @@ mod tests {
                 enabled,
                 global_max_isolates: 16,
                 min_free_memory_mib: 0,
+                outgoing_proxy: OutgoingProxyConfig::default(),
             },
             PoolLimits::default(),
         )
