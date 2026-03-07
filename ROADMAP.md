@@ -127,16 +127,19 @@ let io = TokioIo::new(maybe_stream);
 
 **Objetivo:** compatibilizar pipeline de streaming usado por React SSR/Next.
 
-- [ ] Implementar ponte robusta Web Streams <-> Node Streams (quando necessário)
-- [ ] Garantir flush/backpressure corretos em resposta incremental
-- [ ] Validar `ReadableStream` em respostas longas sem buffering total em memória
+- [x] Implementar ponte robusta Web Streams <-> Node Streams (quando necessário)
+- [x] Garantir flush/backpressure corretos em resposta incremental
+- [x] Validar `ReadableStream` em respostas longas sem buffering total em memória
 - [x] Garantir comportamento consistente de cancelamento (`AbortSignal`) durante stream
 - [x] Adicionar teste E2E de SSR streaming com chunked body
 
 Status aplicado (07/03/2026):
 - `node:stream.pipeline` agora aceita `signal` em options e aborta a cadeia com teardown/destroy determinístico.
 - Teste E2E `e2e_ingress_streaming_returns_progressive_chunked_body` em `crates/server/src/lib.rs` valida resposta chunked progressiva no ingress.
-- Itens de bridge Web Streams <-> Node Streams e cobertura completa de backpressure/stream longo seguem pendentes para fechamento total da seção.
+- `Writable` em `node:stream` passou a aplicar pressão por `highWaterMark` com contagem de bytes em buffer e `end()` aguardando drenagem completa antes de `finish/close`.
+- Teste E2E `e2e_ingress_streaming_long_chunked_body_completes` em `crates/server/src/lib.rs` valida fluxo chunked longo com marcador inicial/final e conclusão estável.
+- Teste `node_stream_pipeline_handles_backpressure_on_long_flow` em `crates/functions/tests/node_module_imports.rs` valida sinalização real de backpressure (`write()` retornando `false`) e `drain` no fluxo com escrita assíncrona.
+- Bridge Web Streams <-> Node Streams implementada em `node:stream` com `Readable.fromWeb`/`Readable.toWeb` e `Writable.fromWeb`/`Writable.toWeb`, validada por testes dedicados em `crates/functions/tests/node_module_imports.rs`.
 
 **Critério de aceite:** SSR com streaming envia chunks progressivos, sem deadlock e sem corrupção de body.
 
@@ -408,8 +411,9 @@ Não implementar flag de compatibilidade, node compat será ativo por padrão.
     - Referência: `ROADMAP-NODE-COMPAT.md §5.1.1`, `§7.1.1`, `§9 Issue #1`, `§10 Phase 1`.
 - [ ] Fechar semântica de streams com backpressure real:
     - `pause/resume`, `highWaterMark`, sinalização de pressão em `push`, ajuste em `pipeline/pipe`.
-    - Status aplicado (parcial): `Readable.pause/resume`, `highWaterMark` e sinalização básica de backpressure em `push`/`pipe` com pausa por `drain` já implementados; `pipeline` passou a suportar `AbortSignal` com cancelamento/teardown da cadeia e callback de erro determinístico.
-    - Status aplicado (parcial): teste E2E de resposta ingress chunked progressiva adicionado em `crates/server/src/lib.rs`; casos avançados de bridge Web<->Node streams e cenários de pressão extrema seguem pendentes.
+    - Status aplicado (parcial): `Readable.pause/resume`, `highWaterMark` e sinalização básica de backpressure em `push`/`pipe` já implementados; `pipeline` suporta `AbortSignal` com cancelamento/teardown da cadeia e callback de erro determinístico.
+    - Status aplicado (parcial): `Writable` passou a considerar bytes enfileirados contra `highWaterMark` e a finalizar `end()` somente após drenagem completa (evitando perda de chunks em escrita assíncrona).
+    - Status aplicado (parcial): cobertura com teste dedicado `node_stream_pipeline_handles_backpressure_on_long_flow`, E2Es de ingress chunked (progressivo e fluxo longo) e bridges Web<->Node streams (`fromWeb`/`toWeb`) com testes dedicados; cenários extremos de pressão ainda evolutivos.
     - Referência: `ROADMAP-NODE-COMPAT.md §5.1.2`, `§7.1.2`, `§9 Issue #2`, `§10 Phase 1`.
 - [ ] Expandir propagação de contexto ALS além de Promise/microtask/timers:
     - EventEmitter handlers e callbacks assíncronos críticos (incluindo `fs`).

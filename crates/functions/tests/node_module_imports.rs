@@ -742,6 +742,216 @@ fn node_stream_pipeline_handles_backpressure_on_long_flow() {
 }
 
 #[test]
+fn node_stream_readable_web_bridge_roundtrip_works() {
+    deno_core::JsRuntime::init_platform(None);
+
+    let source = r#"
+      import { Readable } from "node:stream";
+
+      const encoder = new TextEncoder();
+      const webReadable = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode("hello-"));
+          controller.enqueue(encoder.encode("bridge"));
+          controller.close();
+        },
+      });
+
+      const nodeReadable = Readable.fromWeb(webReadable);
+      const webRoundtrip = Readable.toWeb(nodeReadable);
+      const reader = webRoundtrip.getReader();
+
+      let out = "";
+      globalThis.__nodeStreamWebReadableBridgeOk = false;
+
+      (async () => {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          out += typeof value === "string" ? value : new TextDecoder().decode(value);
+        }
+        globalThis.__nodeStreamWebReadableBridgeOk = out === "hello-bridge";
+      })().catch(() => {
+        globalThis.__nodeStreamWebReadableBridgeOk = false;
+      });
+    "#;
+
+    let eszip_bytes = build_eszip("file:///node_stream_web_readable_bridge_test.ts", source);
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let local = tokio::task::LocalSet::new();
+    let result: Result<(), String> = local.block_on(&rt, async {
+        let eszip = Arc::new(parse_eszip(&eszip_bytes).await);
+        let root = runtime_core::isolate::determine_root_specifier(&eszip)
+            .map_err(|e| format!("determine_root_specifier: {e}"))?;
+
+        let mut js_runtime = make_runtime_with_eszip(eszip);
+
+        let module_id = js_runtime
+            .load_main_es_module(&root)
+            .await
+            .map_err(|e| format!("load_main_es_module: {e}"))?;
+
+        let eval = js_runtime.mod_evaluate(module_id);
+
+        js_runtime
+            .run_event_loop(PollEventLoopOptions {
+                wait_for_inspector: false,
+                pump_v8_message_loop: true,
+            })
+            .await
+            .map_err(|e| format!("run_event_loop: {e}"))?;
+
+        eval.await.map_err(|e| format!("mod_evaluate: {e}"))?;
+
+        for _ in 0..4 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            js_runtime
+                .run_event_loop(PollEventLoopOptions {
+                    wait_for_inspector: false,
+                    pump_v8_message_loop: true,
+                })
+                .await
+                .map_err(|e| format!("run_event_loop (bridge): {e}"))?;
+        }
+
+        let val = js_runtime
+            .execute_script(
+                "<check>",
+                deno_core::ascii_str!("globalThis.__nodeStreamWebReadableBridgeOk === true"),
+            )
+            .map_err(|e| format!("check script failed: {e}"))?;
+
+        deno_core::scope!(scope, js_runtime);
+        let local_val = val.open(scope);
+        if local_val.is_true() {
+            Ok(())
+        } else {
+            Err("node:stream readable web bridge check failed".to_string())
+        }
+    });
+
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn node_stream_writable_web_bridge_roundtrip_works() {
+    deno_core::JsRuntime::init_platform(None);
+
+    let source = r#"
+      import { Writable } from "node:stream";
+
+      let webSinkOut = "";
+      const webWritable = new WritableStream({
+        write(chunk) {
+          webSinkOut += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);
+        },
+      });
+
+      const nodeWritable = Writable.fromWeb(webWritable);
+      nodeWritable.write("A");
+      nodeWritable.write("B");
+      nodeWritable.end("C");
+
+      let nodeSinkOut = "";
+      const nodeSink = new Writable({
+        write(chunk, _encoding, cb) {
+          nodeSinkOut += String(chunk);
+          cb();
+        },
+      });
+      const webFromNode = Writable.toWeb(nodeSink);
+      const writer = webFromNode.getWriter();
+
+      globalThis.__nodeStreamWebWritableBridgeOk = false;
+      (async () => {
+        await writer.write("X");
+        await writer.write("Y");
+        await writer.close();
+
+                // Allow node->web close propagation to flush final chunk from end("C").
+                for (let i = 0; i < 20 && webSinkOut !== "ABC"; i++) {
+                    await new Promise((resolve) => setTimeout(resolve, 5));
+                }
+
+        globalThis.__nodeStreamWebWritableBridgeOk =
+          webSinkOut === "ABC" && nodeSinkOut === "XY";
+      })().catch(() => {
+        globalThis.__nodeStreamWebWritableBridgeOk = false;
+      });
+    "#;
+
+    let eszip_bytes = build_eszip("file:///node_stream_web_writable_bridge_test.ts", source);
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let local = tokio::task::LocalSet::new();
+    let result: Result<(), String> = local.block_on(&rt, async {
+        let eszip = Arc::new(parse_eszip(&eszip_bytes).await);
+        let root = runtime_core::isolate::determine_root_specifier(&eszip)
+            .map_err(|e| format!("determine_root_specifier: {e}"))?;
+
+        let mut js_runtime = make_runtime_with_eszip(eszip);
+
+        let module_id = js_runtime
+            .load_main_es_module(&root)
+            .await
+            .map_err(|e| format!("load_main_es_module: {e}"))?;
+
+        let eval = js_runtime.mod_evaluate(module_id);
+
+        js_runtime
+            .run_event_loop(PollEventLoopOptions {
+                wait_for_inspector: false,
+                pump_v8_message_loop: true,
+            })
+            .await
+            .map_err(|e| format!("run_event_loop: {e}"))?;
+
+        eval.await.map_err(|e| format!("mod_evaluate: {e}"))?;
+
+        for _ in 0..4 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            js_runtime
+                .run_event_loop(PollEventLoopOptions {
+                    wait_for_inspector: false,
+                    pump_v8_message_loop: true,
+                })
+                .await
+                .map_err(|e| format!("run_event_loop (bridge): {e}"))?;
+        }
+
+        let val = js_runtime
+            .execute_script(
+                "<check>",
+                deno_core::ascii_str!("globalThis.__nodeStreamWebWritableBridgeOk === true"),
+            )
+            .map_err(|e| format!("check script failed: {e}"))?;
+
+        let is_ok = {
+            deno_core::scope!(scope, js_runtime);
+            let local_val = val.open(scope);
+            local_val.is_true()
+        };
+
+        if is_ok {
+            Ok(())
+        } else {
+            Err("node:stream writable web bridge check failed".to_string())
+        }
+    });
+
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
 fn node_os_module_can_be_imported() {
     deno_core::JsRuntime::init_platform(None);
 

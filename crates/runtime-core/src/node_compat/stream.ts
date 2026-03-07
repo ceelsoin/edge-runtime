@@ -49,6 +49,84 @@ class Readable extends Stream {
     return readable;
   }
 
+  static fromWeb(webReadable: ReadableStream<unknown>) {
+    if (!webReadable || typeof (webReadable as ReadableStream<unknown>).getReader !== "function") {
+      throw new TypeError("Readable.fromWeb expects a ReadableStream");
+    }
+
+    const readable = new Readable();
+    const reader = webReadable.getReader();
+
+    const pump = async () => {
+      try {
+        while (!readable.destroyed) {
+          const { done, value } = await reader.read();
+          if (done) {
+            readable.push(null);
+            break;
+          }
+          readable.push(value);
+        }
+      } catch (err) {
+        readable.emit("error", err);
+      } finally {
+        try {
+          reader.releaseLock();
+        } catch {
+          // Ignore lock release errors.
+        }
+      }
+    };
+
+    queueMicrotask(() => {
+      void pump();
+    });
+
+    const originalDestroy = readable.destroy.bind(readable);
+    readable.destroy = (error?: unknown) => {
+      if (typeof reader.cancel === "function") {
+        void reader.cancel(error);
+      }
+      return originalDestroy(error);
+    };
+
+    return readable;
+  }
+
+  static toWeb(readable: Readable) {
+    if (!readable || typeof readable.on !== "function") {
+      throw new TypeError("Readable.toWeb expects a Readable stream instance");
+    }
+
+    return new ReadableStream({
+      start(controller) {
+        const onData = (chunk: unknown) => {
+          controller.enqueue(chunk);
+        };
+        const onEnd = () => {
+          controller.close();
+          cleanup();
+        };
+        const onError = (err: unknown) => {
+          controller.error(err);
+          cleanup();
+        };
+        const cleanup = () => {
+          readable.removeListener("data", onData);
+          readable.removeListener("end", onEnd);
+          readable.removeListener("error", onError);
+        };
+
+        readable.on("data", onData);
+        readable.once("end", onEnd);
+        readable.once("error", onError);
+      },
+      cancel(reason) {
+        readable.destroy(reason);
+      },
+    });
+  }
+
   push(chunk: unknown) {
     if (this.destroyed) return false;
 
@@ -139,7 +217,7 @@ class Writable extends Stream {
   destroyed = false;
   writableEnded = false;
   #writeImpl?: (chunk: unknown, encoding: string, cb: Callback) => void;
-  #buffer: Array<{ data: unknown; encoding: string; size: number }> = [];
+  #buffer: Array<{ data: unknown; encoding: string; size: number; cb: Callback }> = [];
   #highWaterMark: number;
   #writing = false;
   #bufferedBytes = 0;
@@ -154,51 +232,133 @@ class Writable extends Stream {
     this.#highWaterMark = (options.highWaterMark as number) || 16384;
   }
 
+  static fromWeb(webWritable: WritableStream<unknown>) {
+    if (!webWritable || typeof (webWritable as WritableStream<unknown>).getWriter !== "function") {
+      throw new TypeError("Writable.fromWeb expects a WritableStream");
+    }
+
+    const writer = webWritable.getWriter();
+
+    const writable = new Writable({
+      write(chunk: unknown, _encoding: string, cb: Callback) {
+        Promise.resolve(writer.write(chunk)).then(
+          () => cb(),
+          (err) => cb(err),
+        );
+      },
+    });
+
+    writable.once("finish", () => {
+      void writer.close();
+    });
+
+    const originalDestroy = writable.destroy.bind(writable);
+    writable.destroy = (error?: unknown) => {
+      void writer.abort(error);
+      return originalDestroy(error);
+    };
+
+    return writable;
+  }
+
+  static toWeb(writable: Writable) {
+    if (!writable || typeof writable.write !== "function") {
+      throw new TypeError("Writable.toWeb expects a Writable stream instance");
+    }
+
+    return new WritableStream({
+      write(chunk) {
+        return new Promise<void>((resolve, reject) => {
+          let settled = false;
+          const resolveOnce = () => {
+            if (settled) return;
+            settled = true;
+            resolve();
+          };
+          const rejectOnce = (err: unknown) => {
+            if (settled) return;
+            settled = true;
+            reject(err);
+          };
+
+          const ok = writable.write(chunk, (err?: unknown) => {
+            if (err) rejectOnce(err);
+            else resolveOnce();
+          });
+
+          if (!ok) {
+            writable.once("drain", () => resolveOnce());
+          }
+        });
+      },
+      close() {
+        return new Promise<void>((resolve, reject) => {
+          writable.end((err?: unknown) => {
+            if (err) reject(err);
+            else resolve();
+          });
+        });
+      },
+      abort(reason) {
+        writable.destroy(reason);
+      },
+    });
+  }
+
   write(chunk: unknown, encodingOrCb?: string | Callback, maybeCb?: Callback) {
-    if (this.destroyed || this.writableEnded || this.#ending) return false;
+    if (this.destroyed || this.writableEnded) return false;
 
     const encoding = typeof encodingOrCb === "string" ? encodingOrCb : "utf8";
     const cb = (typeof encodingOrCb === "function" ? encodingOrCb : maybeCb) ?? (() => {});
     const size = byteLengthOfChunk(chunk, encoding);
 
-    const done = () => {
-      cb();
-      this.#writing = false;
+    const entry = { data: chunk, encoding, size, cb };
 
-      // Flush buffer if there's more data
-      if (this.#buffer.length > 0) {
-        const nextChunk = this.#buffer.shift()!;
-        this.#bufferedBytes = Math.max(0, this.#bufferedBytes - nextChunk.size);
-        this.write(nextChunk.data, nextChunk.encoding);
+    // If already writing, buffer the chunk
+    if (this.#writing) {
+      this.#buffer.push(entry);
+      this.#bufferedBytes += size;
+      return this.#bufferedBytes < this.#highWaterMark;
+    }
+
+    this.#writing = true;
+    this.#performWrite(entry);
+
+    return this.#bufferedBytes < this.#highWaterMark;
+  }
+
+  #performWrite(entry: { data: unknown; encoding: string; size: number; cb: Callback }) {
+    const done = (err?: unknown) => {
+      entry.cb(err);
+
+      if (err !== undefined) {
+        this.#writing = false;
+        this.emit("error", err);
         return;
       }
 
-      // Emit drain when buffer is flushed
-      if (this.#buffer.length === 0) {
-        queueMicrotask(() => this.emit("drain"));
+      this.#writing = false;
+
+      if (this.#buffer.length > 0) {
+        const nextChunk = this.#buffer.shift()!;
+        this.#bufferedBytes = Math.max(0, this.#bufferedBytes - nextChunk.size);
+        this.#writing = true;
+        this.#performWrite(nextChunk);
+        return;
       }
+
+      queueMicrotask(() => this.emit("drain"));
 
       if (this.#ending) {
         this.#finalizeEnd();
       }
     };
 
-    // If already writing, buffer the chunk
-    if (this.#writing || this.#buffer.length > 0) {
-      this.#buffer.push({ data: chunk, encoding, size });
-      this.#bufferedBytes += size;
-      return this.#bufferedBytes < this.#highWaterMark;
-    }
-
-    this.#writing = true;
-
     if (this.#writeImpl) {
-      this.#writeImpl(chunk, encoding, done);
+      this.#writeImpl(entry.data, entry.encoding, done);
     } else {
       done();
     }
-
-    return this.#bufferedBytes < this.#highWaterMark;
   }
 
   end(chunkOrCb?: unknown, encodingOrCb?: string | Callback, maybeCb?: Callback) {
