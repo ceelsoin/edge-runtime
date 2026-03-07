@@ -174,7 +174,7 @@ Unsupported privileged behavior fails with deterministic errors (for example `EO
 | `node:module` | 🟢 Supported (practical subset) | Partial | Partial | `createRequire` and built-in-only `require()` with explicit deterministic policy for unsupported modules. |
 | `node:fs` | 🟢 Supported (practical subset) | Partial | Partial | VFS-backed module: `/bundle` read-only, `/tmp` writable/ephemeral, `/dev/null` sink. Host filesystem stays inaccessible. |
 | `node:fs/promises` | 🟢 Supported (practical subset) | Partial | Partial | Promise APIs mirror VFS behavior, including writable `/tmp` and deterministic quota/read-only errors. |
-| `node:async_hooks` | 🟡 Partial (stub/non-functional) | Stub/Partial | Partial | Async context tracking compatibility surface for ecosystems that import async hooks. |
+| `node:async_hooks` | 🟢 Supported (practical subset) | Partial | Partial | `AsyncLocalStorage` and hook callbacks propagate context across common async boundaries (Promise/microtask). |
 | `node:child_process` | 🟡 Partial (stub/non-functional) | Stub/Partial | Partial | Non-functional process-spawn APIs with deterministic not-implemented behavior. |
 | `node:cluster` | 🟡 Partial (stub/non-functional) | Stub/Partial | Partial | Non-functional cluster orchestration APIs with deterministic failures. |
 | `node:console` | 🟢 Supported (practical subset) | Partial | Partial | Console module compatibility maps to runtime console implementation. |

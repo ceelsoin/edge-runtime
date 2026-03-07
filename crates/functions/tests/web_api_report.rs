@@ -325,15 +325,41 @@ fn define_node_compat_checks() -> Vec<NodeCompatCheck> {
                 },
                 NodeCompatCheck {
                         api: "node:async_hooks",
-                        profile: "Stub/Partial",
-                        notes: "Async context tracking compatibility surface for ecosystems that import async hooks.",
+                        profile: "Partial",
+                        notes: "`AsyncLocalStorage` and hook callbacks propagate context across common async boundaries (Promise/microtask).",
                         js_check: r#"(() => {
                             const key = '__edge_node_async_hooks_check';
                             if (globalThis[key] === undefined) {
                                 globalThis[key] = 'pending';
                                 import('node:async_hooks').then((m) => {
                                     const als = new m.AsyncLocalStorage();
-                                    globalThis[key] = typeof m.createHook === 'function' && als.run(1, () => als.getStore()) === 1 ? 'partial' : 'none';
+                                    let promiseCtx;
+                                    let microtaskCtx;
+                                    const hook = m.createHook({
+                                        init: () => {},
+                                    }).enable();
+
+                                    als.run('ctx-promise', () => {
+                                        Promise.resolve().then(() => {
+                                            promiseCtx = als.getStore();
+                                        });
+                                    });
+
+                                    als.run('ctx-microtask', () => {
+                                        queueMicrotask(() => {
+                                            microtaskCtx = als.getStore();
+                                        });
+                                    });
+
+                                    Promise.resolve().then(() => {
+                                        hook.disable();
+                                        globalThis[key] =
+                                            typeof m.executionAsyncId === 'function' &&
+                                            typeof m.triggerAsyncId === 'function' &&
+                                            promiseCtx === 'ctx-promise' &&
+                                            microtaskCtx === 'ctx-microtask'
+                                            ? 'partial' : 'none';
+                                    });
                                 }).catch(() => {
                                     globalThis[key] = 'none';
                                 });

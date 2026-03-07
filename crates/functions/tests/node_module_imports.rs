@@ -811,6 +811,32 @@ fn additional_node_stub_modules_import_and_behave_predictably() {
       try { new vm.Script('1+1').runInThisContext(); } catch (_) { deterministicErrors++; }
       try { zlib.gzipSync('x'); } catch (_) { deterministicErrors++; }
 
+            const als = new asyncHooks.AsyncLocalStorage();
+            const hook = asyncHooks.createHook({
+                init: () => {},
+            }).enable();
+
+            let alsPromiseValue;
+            await new Promise((resolve) => {
+                als.run('ctx:promise', () => {
+                    Promise.resolve().then(() => {
+                        alsPromiseValue = als.getStore();
+                        resolve(undefined);
+                    });
+                });
+            });
+
+            let alsMicrotaskValue;
+            await new Promise((resolve) => {
+                als.run('ctx:microtask', () => {
+                    queueMicrotask(() => {
+                        alsMicrotaskValue = als.getStore();
+                        resolve(undefined);
+                    });
+                });
+            });
+            hook.disable();
+
             const previousFetchHook = globalThis.__edgeMockFetchHandler;
             globalThis.__edgeMockFetchHandler = async (input) => {
                 const raw = typeof input === 'string' ? input : input?.url;
@@ -913,6 +939,10 @@ fn additional_node_stub_modules_import_and_behave_predictably() {
 
             globalThis.__nodeMoreStubsOk =
                 typeof asyncHooks.createHook === 'function' &&
+                typeof asyncHooks.executionAsyncId === 'function' &&
+                typeof asyncHooks.triggerAsyncId === 'function' &&
+                alsPromiseValue === 'ctx:promise' &&
+                alsMicrotaskValue === 'ctx:microtask' &&
                 typeof net.connect === 'function' &&
                 typeof tls.connect === 'function' &&
                 typeof http.request === 'function' &&
@@ -978,9 +1008,13 @@ fn additional_node_stub_modules_import_and_behave_predictably() {
             )
             .map_err(|e| format!("check script failed: {e}"))?;
 
-        deno_core::scope!(scope, js_runtime);
-        let local_val = val.open(scope);
-        if local_val.is_true() {
+        let passed = {
+            deno_core::scope!(scope, js_runtime);
+            let local_val = val.open(scope);
+            local_val.is_true()
+        };
+
+        if passed {
             Ok(())
         } else {
             Err("additional node stub modules check failed".to_string())

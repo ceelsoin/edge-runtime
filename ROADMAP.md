@@ -3,7 +3,7 @@
 > Baseado na auditoria de segurança e arquitetura realizada em 05/03/2026.
 > Cada item referencia o finding correspondente no `AUDIT.md`.
 >
-> Última atualização: 07/03/2026 (P1 de VFS seguro em `node:fs` concluído com quotas configuráveis por manifest/flag/env, `http/https` client-side compat, P2 de `node:dns` via DoH controlado e expansão de `node:util`/`node:diagnostics_channel`).
+> Última atualização: 07/03/2026 (P1 de VFS seguro em `node:fs` concluído com quotas configuráveis por manifest/flag/env, `http/https` client-side compat, P2 de `node:dns` via DoH controlado, expansão de `node:util`/`node:diagnostics_channel` e `async_hooks`/ALS com propagação real).
 > Commits de referência: `92aa473`, `6607a2b`, `4933dda`.
 > Inclui também mudanças locais ainda não commitadas em `functions/runtime-core`.
 
@@ -817,7 +817,10 @@ Notas de cobertura:
 - [x] **P2:** expandir `util` (`MIMEType`) e `diagnostics_channel` (`TracingChannel`) conforme documentação.
     - Status aplicado: `node:util` agora expõe `MIMEType` e `MIMEParams` com parsing básico, `params` mutáveis e serialização determinística.
     - Status aplicado: `node:diagnostics_channel` inclui `TracingChannel`/`tracingChannel` com hooks `start/end/asyncStart/asyncEnd/error` e helpers `traceSync`/`tracePromise`/`traceCallback`.
-- [ ] **P2:** elevar `async_hooks`/ALS de stub para uso real com testes de propagação de contexto.
+- [x] **P2:** elevar `async_hooks`/ALS de stub para uso real com testes de propagação de contexto.
+    - Status aplicado: `AsyncLocalStorage` com propagação de contexto para `Promise.then/catch` e `queueMicrotask` via instrumentação de callbacks.
+    - Status aplicado: `createHook` funcional (subset) com `enable/disable` e eventos (`init`, `before`, `after`, `destroy`) em recursos instrumentados.
+    - Status aplicado: `executionAsyncId`/`triggerAsyncId` e `AsyncResource.runInAsyncScope` com IDs estáveis no escopo compat.
 - [ ] **P3:** substituir `zlib` stub por implementação funcional (ou bridge para APIs nativas de compressão).
 
 **Critério de aceite desta trilha:**

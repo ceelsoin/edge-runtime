@@ -1498,6 +1498,253 @@ fn test_original_functions_preserved() {
     assert!(result.is_ok(), "test failed: {:?}", result.err());
 }
 
+/// Regression: importing node:async_hooks must not break bridge timer/interval
+/// tracking and cleanup by execution ID.
+#[test]
+fn test_async_hooks_import_preserves_bridge_timer_tracking() {
+    deno_core::JsRuntime::init_platform(None);
+
+    let eszip_bytes = build_eszip(
+        "file:///test_async_hooks_timer_bridge.js",
+        r#"
+        import "node:async_hooks";
+        globalThis.__asyncHooksImported = true;
+        "#,
+    );
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let local = tokio::task::LocalSet::new();
+    let result: Result<(), String> = local.block_on(&rt, async {
+        let eszip = Arc::new(parse_eszip(&eszip_bytes).await);
+        let root = runtime_core::isolate::determine_root_specifier(&eszip)
+            .map_err(|e| format!("determine_root_specifier: {e}"))?;
+
+        let mut js_runtime = make_runtime_with_eszip(eszip);
+
+        functions::handler::inject_request_bridge(&mut js_runtime)
+            .map_err(|e| format!("inject_request_bridge: {e}"))?;
+
+        let module_id = js_runtime
+            .load_main_es_module(&root)
+            .await
+            .map_err(|e| format!("load_main_es_module: {e}"))?;
+        let eval = js_runtime.mod_evaluate(module_id);
+
+        js_runtime
+            .run_event_loop(PollEventLoopOptions {
+                wait_for_inspector: false,
+                pump_v8_message_loop: true,
+            })
+            .await
+            .map_err(|e| format!("run_event_loop: {e}"))?;
+        eval.await.map_err(|e| format!("mod_evaluate: {e}"))?;
+
+        // Start request execution context and schedule one timeout + one interval.
+        js_runtime
+            .execute_script(
+                "<start_exec>",
+                deno_core::ascii_str!(
+                    r#"
+                    globalThis.__edgeRuntime.startExecution("async-hooks-bridge");
+                    setTimeout(() => {}, 1000);
+                    setInterval(() => {}, 1000);
+                    "#
+                ),
+            )
+            .map_err(|e| format!("start+schedule: {e}"))?;
+
+        let check_tracking = js_runtime
+            .execute_script(
+                "<check_tracking>",
+                deno_core::ascii_str!(
+                    r#"
+                    (() => {
+                        const timers = globalThis.__edgeRuntime._timerRegistry.get("async-hooks-bridge");
+                        const intervals = globalThis.__edgeRuntime._intervalRegistry.get("async-hooks-bridge");
+                        return (
+                            globalThis.__asyncHooksImported === true &&
+                            timers instanceof Set && timers.size === 1 &&
+                            intervals instanceof Set && intervals.size === 1
+                        );
+                    })();
+                    "#
+                ),
+            )
+            .map_err(|e| format!("check tracking: {e}"))?;
+
+        {
+            deno_core::scope!(scope, js_runtime);
+            let local_val = check_tracking.open(scope);
+            assert!(
+                local_val.is_true(),
+                "timer/interval tracking should remain active after importing node:async_hooks"
+            );
+        }
+
+        js_runtime
+            .execute_script(
+                "<clear_exec>",
+                deno_core::ascii_str!(
+                    r#"globalThis.__edgeRuntime.clearExecutionTimers("async-hooks-bridge");"#
+                ),
+            )
+            .map_err(|e| format!("clearExecutionTimers: {e}"))?;
+
+        let check_cleared = js_runtime
+            .execute_script(
+                "<check_cleared>",
+                deno_core::ascii_str!(
+                    r#"
+                    globalThis.__edgeRuntime._timerRegistry.get("async-hooks-bridge") === undefined &&
+                    globalThis.__edgeRuntime._intervalRegistry.get("async-hooks-bridge") === undefined;
+                    "#
+                ),
+            )
+            .map_err(|e| format!("check cleared: {e}"))?;
+
+        {
+            deno_core::scope!(scope, js_runtime);
+            let local_val = check_cleared.open(scope);
+            assert!(
+                local_val.is_true(),
+                "timer/interval registries should be cleaned after clearExecutionTimers"
+            );
+        }
+
+        Ok(())
+    });
+
+    assert!(result.is_ok(), "test failed: {:?}", result.err());
+}
+
+/// Regression: importing node:async_hooks must not break bridge promise
+/// tracking/cleanup used by clearExecutionTimers.
+#[test]
+fn test_async_hooks_import_preserves_bridge_promise_tracking() {
+    deno_core::JsRuntime::init_platform(None);
+
+    let eszip_bytes = build_eszip(
+        "file:///test_async_hooks_promise_bridge.js",
+        r#"
+        import "node:async_hooks";
+        globalThis.__asyncHooksImported = true;
+        "#,
+    );
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let local = tokio::task::LocalSet::new();
+    let result: Result<(), String> = local.block_on(&rt, async {
+        let eszip = Arc::new(parse_eszip(&eszip_bytes).await);
+        let root = runtime_core::isolate::determine_root_specifier(&eszip)
+            .map_err(|e| format!("determine_root_specifier: {e}"))?;
+
+        let mut js_runtime = make_runtime_with_eszip(eszip);
+
+        functions::handler::inject_request_bridge(&mut js_runtime)
+            .map_err(|e| format!("inject_request_bridge: {e}"))?;
+
+        let module_id = js_runtime
+            .load_main_es_module(&root)
+            .await
+            .map_err(|e| format!("load_main_es_module: {e}"))?;
+        let eval = js_runtime.mod_evaluate(module_id);
+
+        js_runtime
+            .run_event_loop(PollEventLoopOptions {
+                wait_for_inspector: false,
+                pump_v8_message_loop: true,
+            })
+            .await
+            .map_err(|e| format!("run_event_loop: {e}"))?;
+        eval.await.map_err(|e| format!("mod_evaluate: {e}"))?;
+
+        js_runtime
+            .execute_script(
+                "<track_promise>",
+                deno_core::ascii_str!(
+                    r#"
+                    globalThis.__edgeRuntime.startExecution("async-hooks-promise-bridge");
+                    let rejectFn;
+                    const p = new Promise((resolve, reject) => {
+                        rejectFn = reject;
+                        globalThis.__testReject = reject;
+                    });
+                    globalThis.__edgeRuntime._trackPromise(p, rejectFn);
+                    globalThis.__trackedPromise = p;
+                    "#
+                ),
+            )
+            .map_err(|e| format!("track promise: {e}"))?;
+
+        let check_tracked = js_runtime
+            .execute_script(
+                "<check_tracked>",
+                deno_core::ascii_str!(
+                    r#"
+                    (() => {
+                        const promises = globalThis.__edgeRuntime._promiseRegistry.get("async-hooks-promise-bridge");
+                        return (
+                            globalThis.__asyncHooksImported === true &&
+                            promises instanceof Set && promises.size === 1
+                        );
+                    })();
+                    "#
+                ),
+            )
+            .map_err(|e| format!("check tracked: {e}"))?;
+
+        {
+            deno_core::scope!(scope, js_runtime);
+            let local_val = check_tracked.open(scope);
+            assert!(
+                local_val.is_true(),
+                "promise tracking should remain active after importing node:async_hooks"
+            );
+        }
+
+        js_runtime
+            .execute_script(
+                "<clear_exec>",
+                deno_core::ascii_str!(
+                    r#"globalThis.__edgeRuntime.clearExecutionTimers("async-hooks-promise-bridge");"#
+                ),
+            )
+            .map_err(|e| format!("clearExecutionTimers: {e}"))?;
+
+        let check_cleared = js_runtime
+            .execute_script(
+                "<check_cleared>",
+                deno_core::ascii_str!(
+                    r#"
+                    globalThis.__edgeRuntime._promiseRegistry.get("async-hooks-promise-bridge") === undefined;
+                    "#
+                ),
+            )
+            .map_err(|e| format!("check cleared: {e}"))?;
+
+        {
+            deno_core::scope!(scope, js_runtime);
+            let local_val = check_cleared.open(scope);
+            assert!(
+                local_val.is_true(),
+                "promise registry should be cleaned after clearExecutionTimers"
+            );
+        }
+
+        Ok(())
+    });
+
+    assert!(result.is_ok(), "test failed: {:?}", result.err());
+}
+
 /// Test 9: clearTimeout removes timer from registry.
 #[test]
 fn test_clear_timeout_removes_from_registry() {
