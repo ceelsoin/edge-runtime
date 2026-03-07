@@ -796,7 +796,8 @@ fn additional_node_stub_modules_import_and_behave_predictably() {
       try { cluster.fork(); } catch (_) { deterministicErrors++; }
       try { dns.resolve('example.com'); } catch (_) { deterministicErrors++; }
       try { dgram.createSocket('udp4'); } catch (_) { deterministicErrors++; }
-      try { net.connect(80, 'example.com'); } catch (_) { deterministicErrors++; }
+    try { net.createServer().listen(80); } catch (_) { deterministicErrors++; }
+    try { tls.createServer(); } catch (_) { deterministicErrors++; }
       try { repl.start(); } catch (_) { deterministicErrors++; }
       try { new vm.Script('1+1').runInThisContext(); } catch (_) { deterministicErrors++; }
       try { zlib.gzipSync('x'); } catch (_) { deterministicErrors++; }
@@ -841,6 +842,8 @@ fn additional_node_stub_modules_import_and_behave_predictably() {
 
             globalThis.__nodeMoreStubsOk =
                 typeof asyncHooks.createHook === 'function' &&
+                typeof net.connect === 'function' &&
+                typeof tls.connect === 'function' &&
                 typeof http.request === 'function' &&
                 typeof https.request === 'function' &&
                 httpFetchCompat &&

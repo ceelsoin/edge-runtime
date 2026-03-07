@@ -554,16 +554,16 @@ fn define_node_compat_checks() -> Vec<NodeCompatCheck> {
                 },
                 NodeCompatCheck {
                         api: "node:net",
-                        profile: "Stub/Partial",
-                        notes: "Network socket compatibility surface with deterministic non-functional connect/listen.",
+                        profile: "Partial",
+                        notes: "Outbound client socket subset (`connect`) is available; `net.Server` APIs remain deterministic stubs.",
                         js_check: r#"(() => {
                             const key = '__edge_node_net_check';
                             if (globalThis[key] === undefined) {
                                 globalThis[key] = 'pending';
                                 import('node:net').then((m) => {
                                     let deterministic = false;
-                                    try { m.connect(80, 'example.com'); } catch (err) { deterministic = String(err?.message || '').includes('not implemented'); }
-                                    globalThis[key] = typeof m.createServer === 'function' && deterministic ? 'partial' : 'none';
+                                    try { m.createServer().listen(80); } catch (err) { deterministic = String(err?.message || '').includes('not implemented'); }
+                                    globalThis[key] = typeof m.connect === 'function' && typeof m.Socket === 'function' && deterministic ? 'partial' : 'none';
                                 }).catch(() => {
                                     globalThis[key] = 'none';
                                 });
@@ -735,14 +735,16 @@ fn define_node_compat_checks() -> Vec<NodeCompatCheck> {
                 },
                 NodeCompatCheck {
                         api: "node:tls",
-                        profile: "Stub/Partial",
-                        notes: "TLS module compatibility entrypoints with deterministic non-functional operations.",
+                        profile: "Partial",
+                        notes: "Outbound TLS client subset (`connect`) is available; server/context APIs remain deterministic stubs.",
                         js_check: r#"(() => {
                             const key = '__edge_node_tls_check';
                             if (globalThis[key] === undefined) {
                                 globalThis[key] = 'pending';
                                 import('node:tls').then((m) => {
-                                    globalThis[key] = Array.isArray(m.rootCertificates) && typeof m.connect === 'function' ? 'partial' : 'none';
+                                    let deterministic = false;
+                                    try { m.createServer(); } catch (err) { deterministic = String(err?.message || '').includes('not implemented'); }
+                                    globalThis[key] = Array.isArray(m.rootCertificates) && typeof m.connect === 'function' && deterministic ? 'partial' : 'none';
                                 }).catch(() => {
                                     globalThis[key] = 'none';
                                 });

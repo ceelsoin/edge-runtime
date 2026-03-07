@@ -184,7 +184,7 @@ Unsupported privileged behavior fails with deterministic errors (for example `EO
 | `node:https` | 🟡 Partial (stub/non-functional) | Stub/Partial | Partial | HTTPS client compatibility is provided as a wrapper around `fetch()`; server-side APIs remain non-functional. |
 | `node:http2` | 🟡 Partial (stub/non-functional) | Stub/Partial | Partial | HTTP/2 compatibility surface for imports with deterministic non-functional operations. |
 | `node:inspector` | 🟡 Partial (stub/non-functional) | Stub/Partial | Partial | Inspector bridge compatibility surface with no-op/open stubs in this runtime profile. |
-| `node:net` | 🟡 Partial (stub/non-functional) | Stub/Partial | Partial | Network socket compatibility surface with deterministic non-functional connect/listen. |
+| `node:net` | 🟢 Supported (practical subset) | Partial | Partial | Outbound client socket subset (`connect`) is available; `net.Server` APIs remain deterministic stubs. |
 | `node:perf_hooks` | 🟢 Supported (practical subset) | Partial | Partial | Performance hooks compatibility based on runtime Performance APIs. |
 | `node:punycode` | 🟢 Supported (practical subset) | Partial | Partial | Punycode compatibility helpers for import-level ecosystem support. |
 | `node:querystring` | 🟢 Supported (practical subset) | Partial | Partial | Querystring parse/stringify compatibility helpers. |
@@ -193,7 +193,7 @@ Unsupported privileged behavior fails with deterministic errors (for example `EO
 | `node:sqlite` | ⚪ Not supported | Not supported | Full | Intentionally not exposed in this runtime profile to match Workers support boundary. |
 | `node:string_decoder` | 🟢 Supported (practical subset) | Partial | Partial | String decoder compatibility for common buffer decoding flows. |
 | `node:test` | ⚪ Not supported | Not supported | Full | Intentionally not exposed in this runtime profile to match Workers support boundary. |
-| `node:tls` | 🟡 Partial (stub/non-functional) | Stub/Partial | Partial | TLS module compatibility entrypoints with deterministic non-functional operations. |
+| `node:tls` | 🟢 Supported (practical subset) | Partial | Partial | Outbound TLS client subset (`connect`) is available; server/context APIs remain deterministic stubs. |
 | `node:dgram` | 🟡 Partial (stub/non-functional) | Stub/Partial | Partial | UDP/datagram import compatibility with deterministic non-functional sockets. |
 | `node:v8` | 🟡 Partial (stub/non-functional) | Stub/Partial | Partial | V8 compatibility introspection helpers with deterministic static values. |
 | `node:vm` | 🟡 Partial (stub/non-functional) | Stub/Partial | Partial | VM import compatibility with deterministic non-functional script execution APIs. |

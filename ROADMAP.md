@@ -807,7 +807,9 @@ Notas de cobertura:
 - [x] **P1:** modo `http/https` compat opcional (wrapper `fetch` dentro de handler) mantendo default seguro atual.
     - Status aplicado: client-side `request/get` em `node:http` e `node:https` já operam via wrapper `fetch`; APIs server-side permanecem não funcionais por sandbox.
     - Status aplicado: adapter `request` com contrato básico (`get/post/put/patch/del/delete`, callback `(err,res,body)`, `write/end`) sobre o wrapper HTTP compat.
-- [ ] **P1:** `node:net` outbound-only (sem `net.Server`) e `node:tls` outbound compatível.
+- [x] **P1:** `node:net` outbound-only (sem `net.Server`) e `node:tls` outbound compatível.
+    - Status aplicado: `net.connect`/`createConnection` e `tls.connect` expostos para subset cliente outbound.
+    - Status aplicado: superfícies server/context não implementadas continuam em stub determinístico (`net.Server.listen`, `tls.createServer`, `tls.createSecureContext`).
 - [ ] **P2:** `dns` funcional via resolver controlado (DoH/subrequest), com limites explícitos.
 - [ ] **P2:** expandir `util` (`MIMEType`) e `diagnostics_channel` (`TracingChannel`) conforme documentação.
 - [ ] **P2:** elevar `async_hooks`/ALS de stub para uso real com testes de propagação de contexto.
