@@ -261,3 +261,33 @@ fn node_fs_promises_honor_vfs_quota_limits() {
         "node:fs/promises deterministic rejection check",
     );
 }
+
+#[test]
+fn node_fs_callbacks_preserve_async_local_storage_context() {
+        let source = r#"
+            import fs from "node:fs";
+            import { AsyncLocalStorage } from "node:async_hooks";
+
+            const als = new AsyncLocalStorage();
+            let callbackStore = null;
+
+            als.run("request-context", () => {
+                fs.writeFile("/tmp/als-callback.txt", "ok", null, (err) => {
+                    if (!err) {
+                        callbackStore = als.getStore();
+                    }
+                });
+
+                // Mutate current context after callback registration; callback should keep captured one.
+                als.enterWith("mutated-context");
+            });
+
+            globalThis.__nodeFsAlsCallbackOk = callbackStore === "request-context";
+        "#;
+
+        run_module_and_check(
+                source,
+                "globalThis.__nodeFsAlsCallbackOk === true",
+                "node:fs callback should preserve ALS context",
+        );
+}

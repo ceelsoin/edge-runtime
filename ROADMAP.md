@@ -457,9 +457,10 @@ Não implementar flag de compatibilidade, node compat será ativo por padrão.
     - Status aplicado: `Writable` considera bytes enfileirados contra `highWaterMark` e finaliza `end()` somente após drenagem completa (evitando perda de chunks em escrita assíncrona).
     - Status aplicado: cobertura com teste dedicado `node_stream_pipeline_handles_backpressure_on_long_flow`, E2Es de ingress chunked (progressivo e fluxo longo) e bridges Web<->Node streams (`fromWeb`/`toWeb`) com testes dedicados.
     - Referência: `ROADMAP-NODE-COMPAT.md §5.1.2`, `§7.1.2`, `§9 Issue #2`, `§10 Phase 1`.
-- [ ] Expandir propagação de contexto ALS além de Promise/microtask/timers:
+- [x] Expandir propagação de contexto ALS além de Promise/microtask/timers:
     - EventEmitter handlers e callbacks assíncronos críticos (incluindo `fs`).
-    - Status aplicado (parcial): propagação de ALS para listeners de `EventEmitter` implementada; callbacks críticos adicionais (incluindo `fs`) ainda pendentes.
+    - Status aplicado: propagação de ALS para listeners de `EventEmitter` implementada e preservação de contexto em callbacks de `node:fs` via wrapper dedicado em `node:async_hooks`.
+    - Status aplicado: bridge de execução (`__edgeRuntime`) passou a aplicar guard de lifecycle para callbacks pendentes (`setTimeout`, `setInterval`, `queueMicrotask`), evitando execução após `clearExecutionTimers/endExecution`.
     - Referência: `ROADMAP-NODE-COMPAT.md §5.1.3`, `§7.1.3`, `§9 Issue #3`, `§9 Issue #10`, `§10 Phase 1/2`.
 
 #### P2 — Compatibilidade de I/O e HTTP em Perfil Seguro

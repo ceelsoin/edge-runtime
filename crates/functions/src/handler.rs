@@ -166,6 +166,8 @@ pub fn inject_request_bridge_with_proxy_and_config(
                 _abortRegistry: new Map(),       // executionId -> Set<AbortController>
                 _promiseRegistry: new Map(),     // executionId -> Set<{promise, reject}>
                 _wsRegistry: new Map(),          // executionId -> Set<WebSocket>
+                _executionState: new Map(),      // executionId -> { active: boolean, token: number }
+                _nextExecutionToken: 1,
                 _lastBlockedNetworkLog: null,
                 _proxyConfig: globalThis.__edgeRuntimeProxyConfig || {
                     httpProxy: null,
@@ -191,7 +193,32 @@ pub fn inject_request_bridge_with_proxy_and_config(
                     this._abortRegistry.set(executionId, new Set());
                     this._promiseRegistry.set(executionId, new Set());
                     this._wsRegistry.set(executionId, new Set());
+                    this._executionState.set(executionId, {
+                        active: true,
+                        token: this._nextExecutionToken++,
+                    });
                     this._clearAsyncHooksExecutionContext(executionId);
+                },
+
+                _captureExecutionSnapshot(executionId) {
+                    if (!executionId) return null;
+                    const state = this._executionState.get(executionId);
+                    if (!state || !state.active) return null;
+                    return { executionId, token: state.token };
+                },
+
+                _isExecutionSnapshotActive(snapshot) {
+                    if (!snapshot || !snapshot.executionId) return false;
+                    const state = this._executionState.get(snapshot.executionId);
+                    return Boolean(state && state.active && state.token === snapshot.token);
+                },
+
+                _deactivateExecution(executionId) {
+                    if (!executionId) return;
+                    const state = this._executionState.get(executionId);
+                    if (state) {
+                        state.active = false;
+                    }
                 },
 
                 registerWebSocketForCurrentExecution(socket) {
@@ -235,6 +262,7 @@ pub fn inject_request_bridge_with_proxy_and_config(
                 },
 
                 endExecution(executionId) {
+                    this._deactivateExecution(executionId);
                     this._closeExecutionWebSockets(executionId, 1001, 'Execution ended');
                     this._timerRegistry.delete(executionId);
                     this._intervalRegistry.delete(executionId);
@@ -244,10 +272,12 @@ pub fn inject_request_bridge_with_proxy_and_config(
                     if (this._currentExecutionId === executionId) {
                         this._currentExecutionId = null;
                     }
+                    this._executionState.delete(executionId);
                     this._clearAsyncHooksExecutionContext(executionId);
                 },
 
                 clearExecutionTimers(executionId) {
+                    this._deactivateExecution(executionId);
                     // Clear setTimeout timers
                     const timers = this._timerRegistry.get(executionId);
                     if (timers) {
@@ -303,6 +333,7 @@ pub fn inject_request_bridge_with_proxy_and_config(
                     if (this._currentExecutionId === executionId) {
                         this._currentExecutionId = null;
                     }
+                    this._executionState.delete(executionId);
                     this._clearAsyncHooksExecutionContext(executionId);
                 },
 
@@ -432,13 +463,20 @@ pub fn inject_request_bridge_with_proxy_and_config(
 
             // Wrap setTimeout to track by execution id
             globalThis.setTimeout = function(fn, delay, ...args) {
+                const execId = globalThis.__edgeRuntime._currentExecutionId;
+                const executionSnapshot = globalThis.__edgeRuntime._captureExecutionSnapshot(execId);
                 const timerId = globalThis.__originalSetTimeout(function() {
                     // Remove from registry when timer fires
-                    const execId = globalThis.__edgeRuntime._currentExecutionId;
-                    if (execId) {
-                        const timers = globalThis.__edgeRuntime._timerRegistry.get(execId);
+                    if (executionSnapshot?.executionId) {
+                        const timers = globalThis.__edgeRuntime._timerRegistry.get(executionSnapshot.executionId);
                         if (timers) timers.delete(timerId);
                     }
+
+                    // Skip execution if request lifecycle has been finalized.
+                    if (!globalThis.__edgeRuntime._isExecutionSnapshotActive(executionSnapshot)) {
+                        return;
+                    }
+
                     // Call original callback
                     if (typeof fn === 'function') {
                         fn(...args);
@@ -448,7 +486,6 @@ pub fn inject_request_bridge_with_proxy_and_config(
                     }
                 }, delay);
 
-                const execId = globalThis.__edgeRuntime._currentExecutionId;
                 if (execId) {
                     const timers = globalThis.__edgeRuntime._timerRegistry.get(execId);
                     if (timers) timers.add(timerId);
@@ -458,8 +495,25 @@ pub fn inject_request_bridge_with_proxy_and_config(
 
             // Wrap setInterval to track by execution id
             globalThis.setInterval = function(fn, interval, ...args) {
-                const intervalId = globalThis.__originalSetInterval(fn, interval, ...args);
                 const execId = globalThis.__edgeRuntime._currentExecutionId;
+                const executionSnapshot = globalThis.__edgeRuntime._captureExecutionSnapshot(execId);
+                const intervalId = globalThis.__originalSetInterval(function(...invokeArgs) {
+                    if (!globalThis.__edgeRuntime._isExecutionSnapshotActive(executionSnapshot)) {
+                        globalThis.__originalClearInterval(intervalId);
+                        if (executionSnapshot?.executionId) {
+                            const intervals = globalThis.__edgeRuntime._intervalRegistry.get(executionSnapshot.executionId);
+                            if (intervals) intervals.delete(intervalId);
+                        }
+                        return;
+                    }
+
+                    if (typeof fn === 'function') {
+                        fn(...invokeArgs);
+                    } else {
+                        eval(fn);
+                    }
+                }, interval, ...args);
+
                 if (execId) {
                     const intervals = globalThis.__edgeRuntime._intervalRegistry.get(execId);
                     if (intervals) intervals.add(intervalId);
@@ -563,14 +617,15 @@ pub fn inject_request_bridge_with_proxy_and_config(
             // Note: Microtasks cannot be cancelled, but we track them for visibility
             globalThis.queueMicrotask = function(callback) {
                 const execId = globalThis.__edgeRuntime._currentExecutionId;
+                const executionSnapshot = globalThis.__edgeRuntime._captureExecutionSnapshot(execId);
 
                 return globalThis.__originalQueueMicrotask(function() {
-                    // Microtasks run in the context they were queued
-                    // We can't cancel them, but we can skip execution if context was cleared
-                    const currentExecId = globalThis.__edgeRuntime._currentExecutionId;
+                    // We can't cancel queued microtasks, but we can skip callback execution
+                    // when their originating request has already been finalized.
+                    if (!globalThis.__edgeRuntime._isExecutionSnapshotActive(executionSnapshot)) {
+                        return;
+                    }
 
-                    // If the execution context changed or was cleared, still run
-                    // (microtasks are atomic and should complete)
                     if (typeof callback === 'function') {
                         callback();
                     }

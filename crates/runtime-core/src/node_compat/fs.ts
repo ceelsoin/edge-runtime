@@ -1,3 +1,5 @@
+import { __edgeWrapNodeCallback } from "node:async_hooks";
+
 type FsError = Error & {
   code: string;
   errno: number;
@@ -324,11 +326,17 @@ function callbackStyle<T>(fn: () => T, cb?: (...args: unknown[]) => void): void 
     fn();
     return;
   }
+
+  const wrappedCallback =
+    typeof __edgeWrapNodeCallback === "function"
+      ? __edgeWrapNodeCallback(callback, "FSCallback")
+      : callback;
+
   try {
     const out = fn();
-    callback(null, out);
+    wrappedCallback(null, out);
   } catch (err) {
-    callback(err);
+    wrappedCallback(err);
   }
 }
 

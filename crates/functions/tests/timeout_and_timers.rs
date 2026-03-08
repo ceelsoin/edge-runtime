@@ -2611,3 +2611,132 @@ fn test_timer_callback_removes_from_registry() {
 
     assert!(result.is_ok(), "test failed: {:?}", result.err());
 }
+
+/// Test 14: setTimeout callback should not run after clearExecutionTimers finalizes execution.
+#[test]
+fn test_timer_callback_skipped_after_clear_execution() {
+    deno_core::JsRuntime::init_platform(None);
+
+    let eszip_bytes = build_eszip("file:///test_timer_skip.js", "globalThis.__test = true;");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let local = tokio::task::LocalSet::new();
+    let result: Result<(), String> = local.block_on(&rt, async {
+        let eszip = Arc::new(parse_eszip(&eszip_bytes).await);
+        let mut js_runtime = make_runtime_with_eszip(eszip);
+
+        functions::handler::inject_request_bridge(&mut js_runtime)
+            .map_err(|e| format!("inject_request_bridge: {e}"))?;
+
+        js_runtime
+            .execute_script(
+                "<schedule_and_clear>",
+                deno_core::ascii_str!(r#"
+                    globalThis.__edgeRuntime.startExecution("timer-skip-exec");
+                    globalThis.__timerFiredAfterClear = false;
+                    setTimeout(() => {
+                        globalThis.__timerFiredAfterClear = true;
+                    }, 0);
+                    globalThis.__edgeRuntime.clearExecutionTimers("timer-skip-exec");
+                "#),
+            )
+            .map_err(|e| format!("schedule_and_clear: {e}"))?;
+
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        js_runtime
+            .run_event_loop(PollEventLoopOptions {
+                wait_for_inspector: false,
+                pump_v8_message_loop: true,
+            })
+            .await
+            .map_err(|e| format!("run_event_loop: {e}"))?;
+
+        let check = js_runtime
+            .execute_script(
+                "<check_timer_skip>",
+                deno_core::ascii_str!(r#"globalThis.__timerFiredAfterClear === false;"#),
+            )
+            .map_err(|e| format!("check_timer_skip: {e}"))?;
+
+        {
+            deno_core::scope!(scope, js_runtime);
+            let local_val = check.open(scope);
+            assert!(
+                local_val.is_true(),
+                "timer callback should be skipped after clearExecutionTimers"
+            );
+        }
+
+        Ok(())
+    });
+
+    assert!(result.is_ok(), "test failed: {:?}", result.err());
+}
+
+/// Test 15: queueMicrotask callback should not run after clearExecutionTimers finalizes execution.
+#[test]
+fn test_microtask_callback_skipped_after_clear_execution() {
+    deno_core::JsRuntime::init_platform(None);
+
+    let eszip_bytes = build_eszip("file:///test_microtask_skip.js", "globalThis.__test = true;");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let local = tokio::task::LocalSet::new();
+    let result: Result<(), String> = local.block_on(&rt, async {
+        let eszip = Arc::new(parse_eszip(&eszip_bytes).await);
+        let mut js_runtime = make_runtime_with_eszip(eszip);
+
+        functions::handler::inject_request_bridge(&mut js_runtime)
+            .map_err(|e| format!("inject_request_bridge: {e}"))?;
+
+        js_runtime
+            .execute_script(
+                "<queue_and_clear>",
+                deno_core::ascii_str!(r#"
+                    globalThis.__edgeRuntime.startExecution("microtask-skip-exec");
+                    globalThis.__microtaskFiredAfterClear = false;
+                    queueMicrotask(() => {
+                        globalThis.__microtaskFiredAfterClear = true;
+                    });
+                    globalThis.__edgeRuntime.clearExecutionTimers("microtask-skip-exec");
+                "#),
+            )
+            .map_err(|e| format!("queue_and_clear: {e}"))?;
+
+        js_runtime
+            .run_event_loop(PollEventLoopOptions {
+                wait_for_inspector: false,
+                pump_v8_message_loop: true,
+            })
+            .await
+            .map_err(|e| format!("run_event_loop: {e}"))?;
+
+        let check = js_runtime
+            .execute_script(
+                "<check_microtask_skip>",
+                deno_core::ascii_str!(r#"globalThis.__microtaskFiredAfterClear === false;"#),
+            )
+            .map_err(|e| format!("check_microtask_skip: {e}"))?;
+
+        {
+            deno_core::scope!(scope, js_runtime);
+            let local_val = check.open(scope);
+            assert!(
+                local_val.is_true(),
+                "microtask callback should be skipped after clearExecutionTimers"
+            );
+        }
+
+        Ok(())
+    });
+
+    assert!(result.is_ok(), "test failed: {:?}", result.err());
+}

@@ -233,6 +233,18 @@ function triggerAsyncId(): number {
   return currentTriggerAsyncId;
 }
 
+function wrapNodeCallback<T extends (...args: unknown[]) => unknown>(
+  callback: T,
+  type = "NodeCallback",
+  resource?: unknown,
+): T {
+  if (typeof callback !== "function") {
+    throw new TypeError("callback must be a function");
+  }
+  installAsyncInstrumentation();
+  return wrapCallbackWithContext(String(type || "NodeCallback"), callback, resource);
+}
+
 type EdgeRuntimeAsyncHooksBridge = {
   runWithExecutionContext<R>(executionId: string, callback: () => R | Promise<R>): R | Promise<R>;
   clearExecutionContext(executionId: string): void;
@@ -293,7 +305,15 @@ const asyncHooks = {
   createHook,
   executionAsyncId,
   triggerAsyncId,
+  __edgeWrapNodeCallback: wrapNodeCallback,
 };
 
-export { AsyncLocalStorage, AsyncResource, createHook, executionAsyncId, triggerAsyncId };
+export {
+  AsyncLocalStorage,
+  AsyncResource,
+  createHook,
+  executionAsyncId,
+  triggerAsyncId,
+  wrapNodeCallback as __edgeWrapNodeCallback,
+};
 export default asyncHooks;
