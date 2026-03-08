@@ -1491,6 +1491,122 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn e2e_ingress_preserves_http_header_semantics_on_rewrite() {
+        init_deno_platform();
+
+        let admin_probe = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("failed to bind admin probe listener");
+        let admin_addr = admin_probe
+            .local_addr()
+            .expect("failed to get admin local addr");
+        drop(admin_probe);
+
+        let ingress_probe = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("failed to bind ingress probe listener");
+        let ingress_addr = ingress_probe
+            .local_addr()
+            .expect("failed to get ingress local addr");
+        drop(ingress_probe);
+
+        let registry = make_test_registry();
+        let shutdown = CancellationToken::new();
+
+        let semantics_eszip = build_eszip_async(
+            "file:///http_semantics_e2e.ts",
+            r#"
+            Deno.serve((req) => {
+              const acceptEncoding = req.headers.get('accept-encoding') || '';
+              const headers = new Headers();
+              headers.append('set-cookie', 'a=1; Path=/; HttpOnly');
+              headers.append('set-cookie', 'b=2; Path=/; Secure');
+              headers.set('content-encoding', 'gzip');
+              headers.set('x-accept-encoding', acceptEncoding);
+              return new Response('semantics-ok', { status: 200, headers });
+            });
+            "#,
+        )
+        .await;
+        let bundle = BundlePackage::eszip_only(semantics_eszip);
+        let bundle_data = bincode::serialize(&bundle).expect("failed to serialize bundle");
+
+        registry
+            .deploy(
+                "http-semantics-e2e".to_string(),
+                bytes::Bytes::from(bundle_data),
+                None,
+                None,
+            )
+            .await
+            .expect("failed to deploy http semantics test function");
+
+        let server_config = DualServerConfig {
+            admin: AdminListenerConfig {
+                addr: admin_addr,
+                api_key: None,
+                tls: None,
+                body_limits: BodyLimitsConfig::default(),
+                bundle_signature: BundleSignatureConfig {
+                    required: false,
+                    public_key_path: None,
+                },
+            },
+            ingress: IngressListenerConfig {
+                listener_type: IngressListenerType::Tcp(ingress_addr),
+                tls: None,
+                rate_limit_rps: None,
+                body_limits: BodyLimitsConfig::default(),
+            },
+            graceful_exit_deadline_secs: 1,
+            max_connections: 128,
+        };
+
+        let server_shutdown = shutdown.clone();
+        let registry_for_server = registry.clone();
+        let server_handle = tokio::spawn(async move {
+            run_dual_server(server_config, registry_for_server, server_shutdown).await
+        });
+
+        wait_for_tcp_listener(admin_addr).await;
+        wait_for_tcp_listener(ingress_addr).await;
+
+        let raw_response = send_plain_http(
+            ingress_addr,
+            "GET /http-semantics-e2e HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip, br\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+
+        assert!(
+            raw_response.starts_with("HTTP/1.1 200"),
+            "expected 200 response: {raw_response}"
+        );
+
+        let response_lower = raw_response.to_ascii_lowercase();
+        assert!(
+            response_lower.contains("content-encoding: gzip"),
+            "expected content-encoding header preserved: {raw_response}"
+        );
+        assert!(
+            response_lower.contains("x-accept-encoding: gzip, br"),
+            "expected accept-encoding forwarded through rewrite path: {raw_response}"
+        );
+
+        let set_cookie_count = response_lower.matches("set-cookie:").count();
+        assert_eq!(
+            set_cookie_count, 2,
+            "expected two independent set-cookie headers without flattening: {raw_response}"
+        );
+
+        shutdown.cancel();
+        let server_result = tokio::time::timeout(Duration::from_secs(3), server_handle)
+            .await
+            .expect("server task did not finish in time")
+            .expect("server join error");
+        server_result.expect("server returned error");
+    }
+
+    #[tokio::test]
     async fn e2e_async_local_storage_isolated_between_overlapping_requests() {
         init_deno_platform();
 

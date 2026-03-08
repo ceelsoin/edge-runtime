@@ -581,17 +581,30 @@ pub fn inject_request_bridge_with_proxy_and_config(
                 if (!handler) {
                     return JSON.stringify({
                         status: 503,
-                        headers: { "content-type": "application/json" },
+                        headers: [["content-type", "application/json"]],
                         body_kind: 'inline',
                         body_base64: btoa('{"error":"no handler registered"}'),
                     });
                 }
 
                 try {
-                    const headers = JSON.parse(headersJson || '{}');
+                    const parsedHeaders = JSON.parse(headersJson || '[]');
+                    const requestHeaders = new Headers();
+                    if (Array.isArray(parsedHeaders)) {
+                        for (const pair of parsedHeaders) {
+                            if (Array.isArray(pair) && pair.length >= 2) {
+                                requestHeaders.append(String(pair[0]), String(pair[1]));
+                            }
+                        }
+                    } else if (parsedHeaders && typeof parsedHeaders === 'object') {
+                        for (const [key, value] of Object.entries(parsedHeaders)) {
+                            requestHeaders.append(String(key), String(value));
+                        }
+                    }
+
                     const reqInit = {
                         method: method,
-                        headers: new Headers(headers),
+                        headers: requestHeaders,
                     };
                     if (body && body.length > 0 && method !== 'GET' && method !== 'HEAD') {
                         reqInit.body = body;
@@ -605,10 +618,18 @@ pub fn inject_request_bridge_with_proxy_and_config(
                         )
                         : await executeHandler();
 
-                    const respHeaders = {};
+                    let respHeaders = [];
                     response.headers.forEach((value, key) => {
-                        respHeaders[key] = value;
+                        respHeaders.push([key, value]);
                     });
+
+                    if (typeof response.headers.getSetCookie === 'function') {
+                        const withoutSetCookie = respHeaders.filter(([key]) => key.toLowerCase() !== 'set-cookie');
+                        for (const cookieValue of response.headers.getSetCookie()) {
+                            withoutSetCookie.push(['set-cookie', cookieValue]);
+                        }
+                        respHeaders = withoutSetCookie;
+                    }
 
                     const hasBody =
                         response.body && method !== 'HEAD' && response.status !== 204 && response.status !== 304;
@@ -647,7 +668,7 @@ pub fn inject_request_bridge_with_proxy_and_config(
                 } catch (err) {
                     return JSON.stringify({
                         status: 500,
-                        headers: { "content-type": "application/json" },
+                        headers: [["content-type", "application/json"]],
                         body_kind: 'inline',
                         body_base64: btoa(JSON.stringify({ error: String(err) })),
                     });
@@ -663,7 +684,7 @@ pub fn inject_request_bridge_with_proxy_and_config(
 #[derive(serde::Deserialize)]
 struct JsResponse {
     status: u16,
-    headers: std::collections::HashMap<String, String>,
+    headers: Vec<(String, String)>,
     body_kind: String,
     #[serde(default)]
     body_base64: String,
@@ -689,13 +710,13 @@ pub async fn dispatch_request(
     let path = request.uri().path_and_query().map_or("/", |pq| pq.as_str());
     let uri = format!("http://{host}{path}");
 
-    // Serialize headers to JSON
-    let headers_map: std::collections::HashMap<String, String> = request
+    // Serialize headers to JSON preserving duplicate header semantics.
+    let headers_list: Vec<(String, String)> = request
         .headers()
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
         .collect();
-    let headers_json = serde_json::to_string(&headers_map)?;
+    let headers_json = serde_json::to_string(&headers_list)?;
 
     let body = request.into_body();
     let stream_id = Uuid::new_v4().to_string();
@@ -1081,6 +1102,78 @@ mod tests {
             }
 
             assert_eq!(out, b"ab");
+        });
+    }
+
+    #[test]
+    fn dispatch_preserves_multiple_set_cookie_headers() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let local = tokio::task::LocalSet::new();
+        local.block_on(&rt, async {
+            let mut runtime = make_runtime();
+            inject_request_bridge(&mut runtime).expect("inject_request_bridge failed");
+
+            runtime
+                .execute_script(
+                    "<test>",
+                    deno_core::ascii_str!(
+                        r#"
+                        Deno.serve((_req) => {
+                          const headers = new Headers();
+                          headers.append('set-cookie', 'a=1; Path=/; HttpOnly');
+                          headers.append('set-cookie', 'b=2; Path=/; Secure');
+                          headers.append('x-custom', 'one');
+                          headers.append('x-custom', 'two');
+                          return new Response('ok', { status: 200, headers });
+                        });
+                        "#
+                    ),
+                )
+                .unwrap();
+
+            let request = http::Request::builder()
+                .method("GET")
+                .uri("/cookies")
+                .header("host", "localhost:9000")
+                .body(bytes::Bytes::new())
+                .unwrap();
+
+            let response = dispatch_request(&mut runtime, request)
+                .await
+                .expect("dispatch_request should succeed");
+
+            let set_cookie_values: Vec<String> = response
+                .parts
+                .headers
+                .get_all(http::header::SET_COOKIE)
+                .iter()
+                .filter_map(|v| v.to_str().ok().map(str::to_string))
+                .collect();
+            assert_eq!(set_cookie_values.len(), 2, "expected two set-cookie values");
+            assert!(
+                set_cookie_values
+                    .iter()
+                    .any(|v| v.contains("a=1") && v.contains("HttpOnly"))
+            );
+            assert!(
+                set_cookie_values
+                    .iter()
+                    .any(|v| v.contains("b=2") && v.contains("Secure"))
+            );
+
+            let x_custom_values: Vec<String> = response
+                .parts
+                .headers
+                .get_all("x-custom")
+                .iter()
+                .filter_map(|v| v.to_str().ok().map(str::to_string))
+                .collect();
+            // Non Set-Cookie list headers are merged by Fetch Headers semantics.
+            assert_eq!(x_custom_values, vec!["one, two".to_string()]);
         });
     }
 }

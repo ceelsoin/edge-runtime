@@ -1543,3 +1543,126 @@ fn node_zlib_runtime_config_defaults_are_respected() {
         assert!(result.is_ok(), "{result:?}");
 }
 
+#[test]
+fn web_request_clone_preserves_body_and_locks_original_after_read() {
+        deno_core::JsRuntime::init_platform(None);
+
+        let source = r#"
+                const req = new Request('https://example.com/test', {
+                    method: 'POST',
+                    body: 'clone-me',
+                    headers: { 'content-type': 'text/plain' },
+                });
+
+                const cloned = req.clone();
+                const [originalText, clonedText] = await Promise.all([
+                    req.text(),
+                    cloned.text(),
+                ]);
+
+                let secondReadThrows = false;
+                try {
+                    await req.text();
+                } catch (_err) {
+                    secondReadThrows = true;
+                }
+
+                globalThis.__webRequestCloneOk =
+                    originalText === 'clone-me' &&
+                    clonedText === 'clone-me' &&
+                    req.bodyUsed === true &&
+                    secondReadThrows;
+        "#;
+
+        let result = run_module_and_expect_true(
+                "file:///web_request_clone_semantics.ts",
+                source,
+                "globalThis.__webRequestCloneOk === true",
+        );
+
+        assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn web_response_clone_preserves_body_and_locks_original_after_read() {
+        deno_core::JsRuntime::init_platform(None);
+
+        let source = r#"
+                const resp = new Response('response-clone', {
+                    headers: { 'content-type': 'text/plain' },
+                });
+
+                const cloned = resp.clone();
+                const [originalText, clonedText] = await Promise.all([
+                    resp.text(),
+                    cloned.text(),
+                ]);
+
+                let secondReadThrows = false;
+                try {
+                    await resp.text();
+                } catch (_err) {
+                    secondReadThrows = true;
+                }
+
+                globalThis.__webResponseCloneOk =
+                    originalText === 'response-clone' &&
+                    clonedText === 'response-clone' &&
+                    resp.bodyUsed === true &&
+                    secondReadThrows;
+        "#;
+
+        let result = run_module_and_expect_true(
+                "file:///web_response_clone_semantics.ts",
+                source,
+                "globalThis.__webResponseCloneOk === true",
+        );
+
+        assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn web_stream_tee_splits_stream_without_data_loss() {
+        deno_core::JsRuntime::init_platform(None);
+
+        let source = r#"
+                const encoder = new TextEncoder();
+                const stream = new ReadableStream({
+                    start(controller) {
+                        controller.enqueue(encoder.encode('A'));
+                        controller.enqueue(encoder.encode('B'));
+                        controller.enqueue(encoder.encode('C'));
+                        controller.close();
+                    },
+                });
+
+                const [left, right] = stream.tee();
+
+                const readAll = async (readable) => {
+                    const reader = readable.getReader();
+                    let out = '';
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        out += new TextDecoder().decode(value);
+                    }
+                    return out;
+                };
+
+                const [leftOut, rightOut] = await Promise.all([
+                    readAll(left),
+                    readAll(right),
+                ]);
+
+                globalThis.__webTeeOk = leftOut === 'ABC' && rightOut === 'ABC';
+        "#;
+
+        let result = run_module_and_expect_true(
+                "file:///web_stream_tee_semantics.ts",
+                source,
+                "globalThis.__webTeeOk === true",
+        );
+
+        assert!(result.is_ok(), "{result:?}");
+}
+
