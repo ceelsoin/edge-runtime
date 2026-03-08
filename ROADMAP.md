@@ -451,11 +451,11 @@ Não implementar flag de compatibilidade, node compat será ativo por padrão.
     - Status aplicado: módulo `node:crypto` disponível no runtime com `randomBytes`/`randomFill` via WebCrypto e `createHash`/`createHmac` via ops nativas (`op_edge_crypto_hash`, `op_edge_crypto_hmac`) para algoritmos suportados (`SHA-256`/`SHA-512`).
     - Status aplicado: suíte dedicada adicionada em `crates/functions/tests/node_crypto_streams_async_hooks.rs` para cobertura inicial de carregamento e APIs principais.
     - Referência: `ROADMAP-NODE-COMPAT.md §5.1.1`, `§7.1.1`, `§9 Issue #1`, `§10 Phase 1`.
-- [ ] Fechar semântica de streams com backpressure real:
+- [x] Fechar semântica de streams com backpressure real:
     - `pause/resume`, `highWaterMark`, sinalização de pressão em `push`, ajuste em `pipeline/pipe`.
-    - Status aplicado (parcial): `Readable.pause/resume`, `highWaterMark` e sinalização básica de backpressure em `push`/`pipe` já implementados; `pipeline` suporta `AbortSignal` com cancelamento/teardown da cadeia e callback de erro determinístico.
-    - Status aplicado (parcial): `Writable` passou a considerar bytes enfileirados contra `highWaterMark` e a finalizar `end()` somente após drenagem completa (evitando perda de chunks em escrita assíncrona).
-    - Status aplicado (parcial): cobertura com teste dedicado `node_stream_pipeline_handles_backpressure_on_long_flow`, E2Es de ingress chunked (progressivo e fluxo longo) e bridges Web<->Node streams (`fromWeb`/`toWeb`) com testes dedicados; cenários extremos de pressão ainda evolutivos.
+    - Status aplicado: `Readable.pause/resume`, `highWaterMark` e sinalização de backpressure em `push`/`pipe` implementados; `pipeline` suporta `AbortSignal` com cancelamento/teardown da cadeia e callback de erro determinístico.
+    - Status aplicado: `Writable` considera bytes enfileirados contra `highWaterMark` e finaliza `end()` somente após drenagem completa (evitando perda de chunks em escrita assíncrona).
+    - Status aplicado: cobertura com teste dedicado `node_stream_pipeline_handles_backpressure_on_long_flow`, E2Es de ingress chunked (progressivo e fluxo longo) e bridges Web<->Node streams (`fromWeb`/`toWeb`) com testes dedicados.
     - Referência: `ROADMAP-NODE-COMPAT.md §5.1.2`, `§7.1.2`, `§9 Issue #2`, `§10 Phase 1`.
 - [ ] Expandir propagação de contexto ALS além de Promise/microtask/timers:
     - EventEmitter handlers e callbacks assíncronos críticos (incluindo `fs`).
