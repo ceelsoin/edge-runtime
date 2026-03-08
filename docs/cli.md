@@ -706,6 +706,18 @@ thunder watch [OPTIONS]
   - Optional base port for V8 inspector in watch mode.
   - If provided without value, default is `9229`.
   - For multiple functions, ports auto-increment (`base`, `base+1`, ...).
+  - If omitted, `watch` tries to auto-detect port from environment variables commonly set by debug terminals:
+    - `EDGE_RUNTIME_INSPECT_PORT`
+    - `VSCODE_INSPECTOR_PORT`, `VSCODE_JS_DEBUG_PORT`, `JS_DEBUG_PORT`, `INSPECT_PORT`
+    - `VSCODE_INSPECTOR_OPTIONS` JSON keys: `port`, `inspectorPort`, `inspector_port`
+      - accepts payloads prefixed by JS Debug Terminal markers (example: `:::{...}`)
+    - `NODE_OPTIONS` (Node-compatible parsing):
+      - `--inspect`
+      - `--inspect=<host:port>`
+      - `--inspect-brk`
+      - `--inspect-port=<port>`
+  - If `VSCODE_INSPECTOR_OPTIONS` exists but does not expose a port, `watch` enables inspector on `127.0.0.1:9229`.
+  - `NODE_OPTIONS=--inspect` defaults to `127.0.0.1:9229` when port is not specified.
 - `--inspect-brk`
   - Break on first statement while waiting for debugger attach.
   - Requires `--inspect` to be useful.

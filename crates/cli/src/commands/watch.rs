@@ -1,4 +1,8 @@
+use std::io::{Read, Write};
 use std::net::SocketAddr;
+use std::net::TcpStream;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,6 +13,7 @@ use deno_ast::{EmitOptions, TranspileOptions};
 use deno_graph::ast::CapturingModuleAnalyzer;
 use deno_graph::source::{LoadError, LoadOptions, LoadResponse, Loader};
 use deno_graph::{BuildOptions, GraphKind, ModuleGraph};
+use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -17,6 +22,9 @@ use url::Url;
 use runtime_core::isolate::{IsolateConfig, OutgoingProxyConfig};
 
 use super::embedded_assert;
+
+const DEFAULT_INSPECT_HOST: &str = "127.0.0.1";
+const DEFAULT_INSPECT_PORT: u16 = 9229;
 
 #[derive(Args)]
 pub struct WatchArgs {
@@ -235,7 +243,18 @@ pub fn run(args: WatchArgs) -> Result<(), anyhow::Error> {
             return Err(anyhow::anyhow!("path '{}' does not exist", args.path));
         }
 
-        if args.inspect_allow_remote && args.inspect.is_none() {
+        let effective_inspect = resolve_watch_inspect_config(&args);
+
+        if args.inspect.is_none() {
+            if let Some(base_port) = effective_inspect.port {
+                info!(
+                    "auto-detected inspector base port {} from environment",
+                    base_port
+                );
+            }
+        }
+
+        if args.inspect_allow_remote && effective_inspect.port.is_none() {
             return Err(anyhow::anyhow!(
                 "--inspect-allow-remote requires --inspect"
             ));
@@ -244,14 +263,18 @@ pub fn run(args: WatchArgs) -> Result<(), anyhow::Error> {
         let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
         let shutdown = CancellationToken::new();
 
-        let default_config = build_watch_default_config(&args);
+        let default_config = build_watch_default_config(
+            &args,
+            effective_inspect.inspect_brk,
+            effective_inspect.inspect_allow_remote,
+        );
 
-        if let Some(base_port) = args.inspect {
+        if let Some(base_port) = effective_inspect.port {
             warn!(
                 "V8 inspector is enabled in watch mode on base port {}. Do not use this in production.",
                 base_port
             );
-            if args.inspect_allow_remote {
+            if effective_inspect.inspect_allow_remote {
                 warn!(
                     "Inspector remote access is enabled (--inspect-allow-remote). Debug endpoints are exposed on all interfaces."
                 );
@@ -325,7 +348,14 @@ pub fn run(args: WatchArgs) -> Result<(), anyhow::Error> {
         });
 
         // Initial load of functions
-        load_and_deploy_functions(path, &registry, &default_config, args.inspect).await?;
+        let inspector_ports =
+            load_and_deploy_functions(path, &registry, &default_config, effective_inspect.port)
+                .await?;
+        notify_vscode_auto_attach(
+            effective_inspect.vscode_options.as_ref(),
+            &inspector_ports,
+            &args.path,
+        );
 
         let mut last_update = tokio::time::Instant::now();
         let debounce_duration = Duration::from_millis(args.interval);
@@ -341,8 +371,17 @@ pub fn run(args: WatchArgs) -> Result<(), anyhow::Error> {
                         if now.duration_since(last_update) >= debounce_duration {
                             println!("\n{}", "─".repeat(80));
                             println!("🔄 Changes detected, reloading...");
-                            if let Err(e) = load_and_deploy_functions(path, &registry, &default_config, args.inspect).await {
-                                eprintln!("❌ Error loading functions: {}", e);
+                            match load_and_deploy_functions(path, &registry, &default_config, effective_inspect.port).await {
+                                Ok(inspector_ports) => {
+                                    notify_vscode_auto_attach(
+                                        effective_inspect.vscode_options.as_ref(),
+                                        &inspector_ports,
+                                        &args.path,
+                                    );
+                                }
+                                Err(e) => {
+                                    eprintln!("❌ Error loading functions: {}", e);
+                                }
                             }
                             last_update = now;
                         }
@@ -365,18 +404,263 @@ pub fn run(args: WatchArgs) -> Result<(), anyhow::Error> {
     })
 }
 
+#[derive(Debug, Clone)]
+struct EffectiveInspectConfig {
+    port: Option<u16>,
+    inspect_brk: bool,
+    inspect_allow_remote: bool,
+    vscode_options: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NodeInspectOptions {
+    enabled: bool,
+    host: Option<String>,
+    port: Option<u16>,
+    brk: bool,
+}
+
+fn resolve_watch_inspect_config(args: &WatchArgs) -> EffectiveInspectConfig {
+    let node_options = std::env::var("NODE_OPTIONS")
+        .ok()
+        .map(|raw| parse_node_options(&raw))
+        .unwrap_or(NodeInspectOptions {
+            enabled: false,
+            host: None,
+            port: None,
+            brk: false,
+        });
+
+    let mut port = args.inspect;
+    if port.is_none() {
+        port = detect_inspect_port_from_env();
+    }
+    if port.is_none() && node_options.enabled {
+        port = Some(node_options.port.unwrap_or(DEFAULT_INSPECT_PORT));
+    }
+
+    let vscode_options_raw = std::env::var("VSCODE_INSPECTOR_OPTIONS").ok();
+    let inspect_requested_by_vscode = vscode_options_raw.is_some();
+    if port.is_none() && inspect_requested_by_vscode {
+        // VS Code auto-attach may only signal intent via VSCODE_INSPECTOR_OPTIONS.
+        port = Some(DEFAULT_INSPECT_PORT);
+    }
+
+    let vscode_wait_for_debugger = vscode_options_raw
+        .as_deref()
+        .map(parse_wait_for_debugger_from_vscode_options)
+        .unwrap_or(false);
+
+    let inspect_allow_remote = args.inspect_allow_remote
+        || node_options
+            .host
+            .as_deref()
+            .map(|h| !is_loopback_host(h))
+            .unwrap_or(false);
+
+    EffectiveInspectConfig {
+        port,
+        inspect_brk: args.inspect_brk || node_options.brk || vscode_wait_for_debugger,
+        inspect_allow_remote,
+        vscode_options: vscode_options_raw
+            .as_deref()
+            .and_then(parse_vscode_inspector_options_json),
+    }
+}
+
+fn detect_inspect_port_from_env() -> Option<u16> {
+    for key in [
+        "EDGE_RUNTIME_INSPECT_PORT",
+        "VSCODE_INSPECTOR_PORT",
+        "VSCODE_JS_DEBUG_PORT",
+        "JS_DEBUG_PORT",
+        "INSPECT_PORT",
+    ] {
+        if let Ok(value) = std::env::var(key) {
+            if let Some(port) = parse_inspect_port_value(&value) {
+                return Some(port);
+            }
+        }
+    }
+
+    if let Ok(options) = std::env::var("VSCODE_INSPECTOR_OPTIONS") {
+        if let Some(port) = parse_inspect_port_from_vscode_options(&options) {
+            return Some(port);
+        }
+    }
+
+    None
+}
+
+fn parse_inspect_port_value(raw: &str) -> Option<u16> {
+    let parsed = raw.trim().parse::<u16>().ok()?;
+    if parsed == 0 {
+        return None;
+    }
+    Some(parsed)
+}
+
+fn parse_node_options(raw: &str) -> NodeInspectOptions {
+    let mut parsed = NodeInspectOptions {
+        enabled: false,
+        host: None,
+        port: None,
+        brk: false,
+    };
+
+    for token in raw.split_whitespace() {
+        if token == "--inspect" {
+            parsed.enabled = true;
+            continue;
+        }
+
+        if token == "--inspect-brk" {
+            parsed.enabled = true;
+            parsed.brk = true;
+            continue;
+        }
+
+        if let Some(value) = token.strip_prefix("--inspect=") {
+            parsed.enabled = true;
+            if let Some((host, port)) = parse_inspect_endpoint(value) {
+                if host.is_some() {
+                    parsed.host = host;
+                }
+                if port.is_some() {
+                    parsed.port = port;
+                }
+            }
+            continue;
+        }
+
+        if let Some(value) = token.strip_prefix("--inspect-brk=") {
+            parsed.enabled = true;
+            parsed.brk = true;
+            if let Some((host, port)) = parse_inspect_endpoint(value) {
+                if host.is_some() {
+                    parsed.host = host;
+                }
+                if port.is_some() {
+                    parsed.port = port;
+                }
+            }
+            continue;
+        }
+
+        if let Some(value) = token.strip_prefix("--inspect-port=") {
+            if let Some(port) = parse_inspect_port_value(value) {
+                parsed.port = Some(port);
+            }
+        }
+    }
+
+    parsed
+}
+
+fn parse_inspect_endpoint(value: &str) -> Option<(Option<String>, Option<u16>)> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Some((
+            Some(DEFAULT_INSPECT_HOST.to_string()),
+            Some(DEFAULT_INSPECT_PORT),
+        ));
+    }
+
+    if let Some(port) = parse_inspect_port_value(value) {
+        return Some((Some(DEFAULT_INSPECT_HOST.to_string()), Some(port)));
+    }
+
+    if let Some(host) = value.strip_prefix('[').and_then(|v| v.split_once("]:")) {
+        let port = parse_inspect_port_value(host.1).unwrap_or(DEFAULT_INSPECT_PORT);
+        return Some((Some(host.0.to_string()), Some(port)));
+    }
+
+    if let Some((host, port_raw)) = value.rsplit_once(':') {
+        if !host.is_empty() {
+            if let Some(port) = parse_inspect_port_value(port_raw) {
+                return Some((Some(host.to_string()), Some(port)));
+            }
+        }
+    }
+
+    Some((Some(value.to_string()), Some(DEFAULT_INSPECT_PORT)))
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    let host = host.trim_matches(['[', ']']);
+    matches!(host, "127.0.0.1" | "localhost" | "::1")
+}
+
+fn parse_inspect_port_from_vscode_options(raw_json: &str) -> Option<u16> {
+    let parsed = parse_vscode_inspector_options_json(raw_json)?;
+
+    for key in ["port", "inspectorPort", "inspector_port"] {
+        let maybe_port = parsed.get(key).and_then(|v| {
+            if let Some(num) = v.as_u64() {
+                return u16::try_from(num).ok().filter(|p| *p > 0);
+            }
+            if let Some(s) = v.as_str() {
+                return parse_inspect_port_value(s);
+            }
+            None
+        });
+        if maybe_port.is_some() {
+            return maybe_port;
+        }
+    }
+
+    None
+}
+
+fn parse_wait_for_debugger_from_vscode_options(raw_json: &str) -> bool {
+    let Some(parsed) = parse_vscode_inspector_options_json(raw_json) else {
+        return false;
+    };
+
+    parsed
+        .get("waitForDebugger")
+        .map(|value| match value {
+            Value::Bool(flag) => *flag,
+            Value::String(s) => !s.trim().is_empty(),
+            _ => false,
+        })
+        .unwrap_or(false)
+}
+
+fn parse_vscode_inspector_options_json(raw: &str) -> Option<Value> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Ok(parsed) = serde_json::from_str::<Value>(trimmed) {
+        return Some(parsed);
+    }
+
+    // JS Debug Terminal may prefix payload with markers like ":::{...}".
+    let start = trimmed.find('{')?;
+    let candidate = &trimmed[start..];
+    if let Ok(parsed) = serde_json::from_str::<Value>(candidate) {
+        return Some(parsed);
+    }
+
+    let end = candidate.rfind('}')?;
+    serde_json::from_str::<Value>(&candidate[..=end]).ok()
+}
+
 async fn load_and_deploy_functions(
     path: &Path,
     registry: &Arc<functions::registry::FunctionRegistry>,
     default_config: &IsolateConfig,
     inspect_base_port: Option<u16>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<u16>> {
     info!("scanning {}", path.display());
 
     let ts_js_pattern = regex::Regex::new(r"\.(ts|js)$")?;
 
     let mut deployed = 0;
     let mut skipped = 0;
+    let mut deployed_inspector_ports = Vec::new();
 
     let mut source_files: Vec<std::path::PathBuf> = walkdir::WalkDir::new(path)
         .into_iter()
@@ -467,6 +751,7 @@ async fn load_and_deploy_functions(
                     Ok(_info) => {
                         println!("✅ Deployed: {} ({} bytes)", func_name, bytes.len());
                         if let Some(port) = inspect_port {
+                            deployed_inspector_ports.push(port);
                             let host = if function_config.inspect_allow_remote {
                                 "0.0.0.0"
                             } else {
@@ -490,6 +775,7 @@ async fn load_and_deploy_functions(
                             Ok(_) => {
                                 println!("🔄 Updated: {}", func_name);
                                 if let Some(port) = inspect_port {
+                                    deployed_inspector_ports.push(port);
                                     let host = if function_config.inspect_allow_remote {
                                         "0.0.0.0"
                                     } else {
@@ -519,7 +805,126 @@ async fn load_and_deploy_functions(
     println!("\n{}", "─".repeat(80));
     println!("📊 Summary: {} deployed, {} skipped", deployed, skipped);
 
-    Ok(())
+    Ok(deployed_inspector_ports)
+}
+
+fn notify_vscode_auto_attach(
+    vscode_options: Option<&Value>,
+    inspector_ports: &[u16],
+    script_name: &str,
+) {
+    let Some(options) = vscode_options else {
+        return;
+    };
+
+    let Some(ipc_path) = options
+        .get("inspectorIpc")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+    else {
+        return;
+    };
+
+    for port in inspector_ports {
+        let Some(inspector_url) = fetch_inspector_websocket_url(*port) else {
+            tracing::debug!(
+                "failed to resolve inspector URL from /json/list for port {}; skipping vscode auto-attach notify",
+                port
+            );
+            continue;
+        };
+
+        if let Err(err) =
+            notify_vscode_inspector_ipc(ipc_path, options, &inspector_url, script_name)
+        {
+            tracing::warn!(
+                "failed to notify VS Code inspector IPC '{}': {}",
+                ipc_path,
+                err
+            );
+        }
+    }
+}
+
+fn fetch_inspector_websocket_url(port: u16) -> Option<String> {
+    let addr = format!("127.0.0.1:{}", port);
+    let mut stream = TcpStream::connect(addr).ok()?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+
+    let request = format!(
+        "GET /json/list HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+        port
+    );
+    stream.write_all(request.as_bytes()).ok()?;
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response).ok()?;
+    let (_, body) = response.split_once("\r\n\r\n")?;
+
+    let parsed: Value = serde_json::from_str(body).ok()?;
+    parsed
+        .as_array()?
+        .first()?
+        .get("webSocketDebuggerUrl")?
+        .as_str()
+        .map(|s| s.to_string())
+}
+
+fn notify_vscode_inspector_ipc(
+    ipc_path: &str,
+    options: &Value,
+    inspector_url: &str,
+    script_name: &str,
+) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut stream = UnixStream::connect(ipc_path)?;
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+
+        let payload = serde_json::json!({
+            "ipcAddress": ipc_path,
+            "pid": std::process::id().to_string(),
+            "telemetry": {
+                "cwd": std::env::current_dir()
+                    .ok()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+                "processId": std::process::id(),
+                "nodeVersion": format!("thunder/{}", env!("CARGO_PKG_VERSION")),
+                "architecture": std::env::consts::ARCH,
+            },
+            "scriptName": script_name,
+            "inspectorURL": inspector_url,
+            "waitForDebugger": true,
+            "ownId": format!("thunder-{}", std::process::id()),
+            "openerId": options.get("openerId").and_then(|v| v.as_str()).unwrap_or(""),
+        });
+
+        let mut bytes = serde_json::to_vec(&payload)?;
+        bytes.push(0);
+        stream.write_all(&bytes)?;
+
+        // js-debug replies with one byte status where 0 indicates success.
+        let mut status = [0_u8; 1];
+        if stream.read_exact(&mut status).is_ok() && status[0] != 0 {
+            anyhow::bail!(
+                "VS Code inspector IPC returned non-zero status: {}",
+                status[0]
+            );
+        }
+
+        return Ok(());
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (ipc_path, options, inspector_url, script_name);
+        anyhow::bail!(
+            "VS Code inspector IPC auto-attach is currently supported only on unix platforms"
+        );
+    }
 }
 
 async fn bundle_file(file_path: &Path) -> anyhow::Result<Vec<u8>> {
@@ -604,14 +1009,18 @@ fn path_to_function_name(path: &Path) -> String {
     }
 }
 
-fn build_watch_default_config(args: &WatchArgs) -> IsolateConfig {
+fn build_watch_default_config(
+    args: &WatchArgs,
+    inspect_brk: bool,
+    inspect_allow_remote: bool,
+) -> IsolateConfig {
     IsolateConfig {
         max_heap_size_bytes: (args.max_heap_mib as usize) * 1024 * 1024,
         cpu_time_limit_ms: args.cpu_time_limit_ms,
         wall_clock_timeout_ms: args.wall_clock_timeout_ms,
         inspect_port: None,
-        inspect_brk: args.inspect_brk,
-        inspect_allow_remote: args.inspect_allow_remote,
+        inspect_brk,
+        inspect_allow_remote,
         enable_source_maps: true,
         // Watch mode is local-dev oriented: do not enforce SSRF network denylist.
         ssrf_config: runtime_core::ssrf::SsrfConfig::disabled(),
@@ -682,11 +1091,155 @@ mod tests {
             tcp_no_proxy: vec![],
         };
 
-        let cfg = build_watch_default_config(&args);
+        let cfg = build_watch_default_config(&args, false, false);
         assert!(
             !cfg.ssrf_config.enabled,
             "watch mode must allow all network by default"
         );
         assert!(cfg.ssrf_config.allow_private_subnets.is_empty());
+    }
+
+    #[test]
+    fn parse_inspect_port_value_accepts_valid_u16() {
+        assert_eq!(parse_inspect_port_value("9229"), Some(9229));
+        assert_eq!(parse_inspect_port_value(" 9230 "), Some(9230));
+    }
+
+    #[test]
+    fn parse_inspect_port_value_rejects_invalid_or_zero() {
+        assert_eq!(parse_inspect_port_value("0"), None);
+        assert_eq!(parse_inspect_port_value("-1"), None);
+        assert_eq!(parse_inspect_port_value("not-a-port"), None);
+    }
+
+    #[test]
+    fn parse_inspect_port_from_vscode_options_supports_common_keys() {
+        assert_eq!(
+            parse_inspect_port_from_vscode_options(r#"{"inspectorPort":9235}"#),
+            Some(9235)
+        );
+        assert_eq!(
+            parse_inspect_port_from_vscode_options(r#"{"port":9240}"#),
+            Some(9240)
+        );
+        assert_eq!(
+            parse_inspect_port_from_vscode_options(r#"{"inspector_port":9250}"#),
+            Some(9250)
+        );
+        assert_eq!(
+            parse_inspect_port_from_vscode_options(r#"{"port":"9255"}"#),
+            Some(9255)
+        );
+        assert_eq!(
+            parse_inspect_port_from_vscode_options(r#"{"inspectorIpc":"/tmp/node-cdp.sock"}"#),
+            None
+        );
+        assert_eq!(
+            parse_inspect_port_from_vscode_options(
+                r#":::{"inspectorIpc":"/tmp/node-cdp.sock","port":"9260"}"#
+            ),
+            Some(9260)
+        );
+    }
+
+    #[test]
+    fn parse_wait_for_debugger_from_vscode_options_supports_bool_and_string() {
+        assert!(parse_wait_for_debugger_from_vscode_options(
+            r#"{"waitForDebugger":true}"#
+        ));
+        assert!(parse_wait_for_debugger_from_vscode_options(
+            r#":::{"waitForDebugger":"1"}"#
+        ));
+        assert!(!parse_wait_for_debugger_from_vscode_options(
+            r#"{"waitForDebugger":""}"#
+        ));
+        assert!(!parse_wait_for_debugger_from_vscode_options("not-json"));
+    }
+
+    #[test]
+    fn parse_node_options_supports_inspect_and_inspect_brk() {
+        let parsed = parse_node_options("--inspect --inspect-brk --inspect-port=9333");
+        assert!(parsed.enabled);
+        assert!(parsed.brk);
+        assert_eq!(parsed.port, Some(9333));
+    }
+
+    #[test]
+    fn parse_node_options_supports_host_port_endpoint() {
+        let parsed = parse_node_options("--inspect=0.0.0.0:9444");
+        assert!(parsed.enabled);
+        assert_eq!(parsed.host.as_deref(), Some("0.0.0.0"));
+        assert_eq!(parsed.port, Some(9444));
+    }
+
+    #[test]
+    fn parse_inspect_endpoint_defaults_port_when_only_host() {
+        let parsed = parse_inspect_endpoint("localhost").expect("endpoint parse");
+        assert_eq!(parsed.0.as_deref(), Some("localhost"));
+        assert_eq!(parsed.1, Some(DEFAULT_INSPECT_PORT));
+    }
+
+    #[test]
+    fn is_loopback_host_handles_common_forms() {
+        assert!(is_loopback_host("127.0.0.1"));
+        assert!(is_loopback_host("localhost"));
+        assert!(is_loopback_host("[::1]"));
+        assert!(!is_loopback_host("0.0.0.0"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn notify_vscode_inspector_ipc_sends_json_payload_with_nul_terminator() {
+        use std::os::unix::net::UnixListener;
+
+        let socket_path = std::env::temp_dir().join(format!(
+            "thunder-inspector-test-{}-{}.sock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock before epoch")
+                .as_nanos()
+        ));
+
+        let listener = UnixListener::bind(&socket_path).expect("bind unix listener");
+
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept socket");
+            let mut received = Vec::new();
+            loop {
+                let mut b = [0_u8; 1];
+                stream.read_exact(&mut b).expect("read byte from socket");
+                if b[0] == 0 {
+                    break;
+                }
+                received.push(b[0]);
+            }
+            stream.write_all(&[0_u8]).expect("write success status");
+            received
+        });
+
+        let options = serde_json::json!({"openerId":"from-test"});
+        let inspector_url = "ws://127.0.0.1:9229/runtime";
+        notify_vscode_inspector_ipc(
+            socket_path.to_str().expect("utf8 socket path"),
+            &options,
+            inspector_url,
+            "./examples/hello/hello.ts",
+        )
+        .expect("notify vscode inspector ipc");
+
+        let payload = handle.join().expect("server thread join");
+        std::fs::remove_file(&socket_path).expect("remove unix socket path");
+
+        let payload: Value =
+            serde_json::from_slice(&payload).expect("decode payload json sent to ipc socket");
+        assert_eq!(
+            payload.get("inspectorURL").and_then(|v| v.as_str()),
+            Some(inspector_url)
+        );
+        assert_eq!(
+            payload.get("openerId").and_then(|v| v.as_str()),
+            Some("from-test")
+        );
     }
 }
