@@ -504,6 +504,9 @@ Metrics freshness note:
 - `/_internal/metrics` and `/metrics` may return cached snapshots.
 - Use `?fresh=1` to force recomputation when validating just-finished load tests.
 
+See also:
+- [`docs/metrics-endpoint-reference.md`](./metrics-endpoint-reference.md) for the complete field-by-field schema reference.
+
 #### Snapshot/V8 Compatibility
 
 `GET /_internal/functions` and `GET /_internal/functions/{name}` include snapshot compatibility metadata per function:
