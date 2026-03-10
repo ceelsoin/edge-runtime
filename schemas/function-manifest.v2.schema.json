@@ -1,0 +1,321 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://thunder.dev/schemas/function-manifest.v2.schema.json",
+  "title": "Edge Runtime Function Manifest v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["manifestVersion", "name", "entrypoint", "flavor", "network"],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "manifestVersion": {
+      "type": "integer",
+      "const": 2
+    },
+    "name": {
+      "$ref": "https://thunder.dev/schemas/base/common.schema.json#/$defs/functionName"
+    },
+    "entrypoint": {
+      "$ref": "https://thunder.dev/schemas/base/common.schema.json#/$defs/nonEmptyString"
+    },
+    "flavor": {
+      "type": "string",
+      "enum": ["single", "routed-app"]
+    },
+    "routes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/route"
+      }
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allow": {
+          "type": "array",
+          "items": {
+            "$ref": "https://thunder.dev/schemas/base/common.schema.json#/$defs/envName"
+          },
+          "uniqueItems": true,
+          "default": []
+        },
+        "secretRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "https://thunder.dev/schemas/base/common.schema.json#/$defs/envName"
+          },
+          "uniqueItems": true,
+          "default": []
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "allow"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "const": "allowlist"
+        },
+        "allow": {
+          "type": "array",
+          "items": {
+            "$ref": "https://thunder.dev/schemas/base/network.schema.json#/$defs/target"
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxHeapMiB": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cpuTimeMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "wallClockTimeoutMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "vfsTotalQuotaBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "vfsMaxFileBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "egressMaxRequestsPerExecution": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "verifyJwt": {
+          "type": "boolean"
+        }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "logLevel": {
+          "$ref": "https://thunder.dev/schemas/base/common.schema.json#/$defs/logLevel"
+        },
+        "traceSamplePercent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        }
+      }
+    },
+    "profiles": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "env": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "allow": {
+                "type": "array",
+                "items": {
+                  "$ref": "https://thunder.dev/schemas/base/common.schema.json#/$defs/envName"
+                },
+                "uniqueItems": true
+              },
+              "secretRefs": {
+                "type": "array",
+                "items": {
+                  "$ref": "https://thunder.dev/schemas/base/common.schema.json#/$defs/envName"
+                },
+                "uniqueItems": true
+              }
+            }
+          },
+          "network": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "allow": {
+                "type": "array",
+                "items": {
+                  "$ref": "https://thunder.dev/schemas/base/network.schema.json#/$defs/target"
+                },
+                "uniqueItems": true
+              }
+            }
+          },
+          "resources": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "maxHeapMiB": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cpuTimeMs": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "wallClockTimeoutMs": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "vfsTotalQuotaBytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "vfsMaxFileBytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "egressMaxRequestsPerExecution": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "auth": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "verifyJwt": {
+                "type": "boolean"
+              }
+            }
+          },
+          "observability": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "logLevel": {
+                "$ref": "https://thunder.dev/schemas/base/common.schema.json#/$defs/logLevel"
+              },
+              "traceSamplePercent": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "flavor": {
+            "const": "single"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "routes": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "flavor": {
+            "const": "routed-app"
+          }
+        }
+      },
+      "then": {
+        "required": ["routes"],
+        "properties": {
+          "routes": {
+            "minItems": 1
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "routePath": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "httpMethod": {
+      "type": "string",
+      "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+    },
+    "route": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "path", "entrypoint"],
+          "properties": {
+            "kind": {
+              "const": "function"
+            },
+            "path": {
+              "$ref": "#/$defs/routePath"
+            },
+            "methods": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/httpMethod"
+              },
+              "uniqueItems": true
+            },
+            "entrypoint": {
+              "$ref": "https://thunder.dev/schemas/base/common.schema.json#/$defs/nonEmptyString"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "path", "assetDir"],
+          "properties": {
+            "kind": {
+              "const": "asset"
+            },
+            "path": {
+              "$ref": "#/$defs/routePath"
+            },
+            "methods": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["GET", "HEAD"]
+              },
+              "uniqueItems": true
+            },
+            "assetDir": {
+              "$ref": "https://thunder.dev/schemas/base/common.schema.json#/$defs/nonEmptyString"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

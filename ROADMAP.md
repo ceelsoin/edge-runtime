@@ -526,11 +526,17 @@ Não implementar flag de compatibilidade, node compat será ativo por padrão.
 
 ### 6.1 Manifest v2 e Flavors de Deploy
 
-- [ ] Criar `schemas/function-manifest.v2.schema.json`
-- [ ] Adicionar parsing e validação v2 em `crates/runtime-core/src/manifest.rs`
-- [ ] Introduzir `flavor: single | routed-app`
-- [ ] Modelar `routes[]` e `asset` routes para apps frontend/backend
+- [x] Criar `schemas/function-manifest.v2.schema.json`
+- [x] Adicionar parsing e validação v2 em `crates/runtime-core/src/manifest.rs`
+- [x] Introduzir `flavor: single | routed-app`
+- [x] Modelar `routes[]` e `asset` routes para apps frontend/backend
 - [ ] Corrigir documentação que hoje pressupõe schema v2 já existente
+
+Status aplicado (10/03/2026):
+- `schemas/function-manifest.v2.schema.json` adicionado com `flavor` (`single`/`routed-app`) e rotas tipadas por `kind` (`function`/`asset`).
+- `crates/runtime-core/src/manifest.rs` atualizado para validar dinamicamente `manifestVersion` 1 ou 2, mantendo compatibilidade com `v1`.
+- Semântica de `v2` adicionada: `single` não aceita `routes`; `routed-app` exige `routes`; rotas `function` exigem `entrypoint`; rotas `asset` exigem `assetDir`.
+- Testes unitários de manifesto expandidos para cobrir cenários `v2` (`single`, `routed-app`, casos inválidos), com execução local verde em `cargo test -p runtime-core manifest::tests`.
 
 **Referência:** `ROADMAP_ROUTING.md` seções 5, 6, 7 e 15.
 

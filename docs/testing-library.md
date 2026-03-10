@@ -27,8 +27,10 @@ import {
   runSuite,
   test,
   // ... demais exports
-} from "edge://assert/mod.ts";
+} from "thunder:testing";
 ```
+
+Observação: o alias `thunder:testing` é resolvido pelo CLI em fluxos locais (`thunder watch`, `thunder bundle`, `thunder test` e `thunder check`).
 
 ---
 
@@ -55,7 +57,7 @@ import {
   assertExists,
   assertInstanceOf,
   assertType,
-} from "edge://assert/mod.ts";
+} from "thunder:testing";
 
 assert(true);
 assertEquals(1 + 1, 2);
@@ -99,7 +101,7 @@ import {
   assertMatch,
   assertArrayIncludes,
   assertObjectMatch,
-} from "edge://assert/mod.ts";
+} from "thunder:testing";
 
 assertMatch("hello world", /world/);
 
@@ -114,7 +116,7 @@ assertObjectMatch(
 ### Assertions de exceção
 
 ```ts
-import { assertThrows, assertRejects } from "edge://assert/mod.ts";
+import { assertThrows, assertRejects } from "thunder:testing";
 
 // Verifica que a função lança qualquer erro
 const err = assertThrows(() => {
@@ -144,7 +146,7 @@ Ambas retornam o `Error` capturado para inspeção adicional.
 Todas as assertions lançam `AssertionError` em caso de falha:
 
 ```ts
-import { AssertionError } from "edge://assert/mod.ts";
+import { AssertionError } from "thunder:testing";
 
 try {
   assertEquals(1, 2);
@@ -162,7 +164,7 @@ try {
 Use `test(...)` para criar casos de teste e `runSuite(...)` para executá-los:
 
 ```ts
-import { runSuite, test, assertEquals } from "edge://assert/mod.ts";
+import { runSuite, test, assertEquals } from "thunder:testing";
 
 await runSuite("math", [
   test("soma funciona", () => {
@@ -231,7 +233,7 @@ import {
   testIgnore,
   testOnly,
   assertEquals,
-} from "edge://assert/mod.ts";
+} from "thunder:testing";
 
 // Executar uma suite diretamente
 await runSuite("example", [
@@ -258,7 +260,7 @@ Comportamento de `only`:
 ### Testes condicionais com `testIf`
 
 ```ts
-import { runSuite, testIf, assert } from "edge://assert/mod.ts";
+import { runSuite, testIf, assert } from "thunder:testing";
 
 const isLinux = Deno.build.os === "linux";
 
@@ -272,7 +274,7 @@ await runSuite("platform", [
 ### Testes parametrizados com `testEach`
 
 ```ts
-import { runSuite, testEach, assertEquals } from "edge://assert/mod.ts";
+import { runSuite, testEach, assertEquals } from "thunder:testing";
 
 await runSuite("parametrized", [
   ...testEach([
@@ -290,7 +292,7 @@ Cada linha gera um teste com nome como `soma [0] [1,2,3]`.
 ### Timeout e Retry
 
 ```ts
-import { runSuite, test, assert } from "edge://assert/mod.ts";
+import { runSuite, test, assert } from "thunder:testing";
 
 await runSuite("resilience", [
   // Falha se demorar mais de 5 segundos
@@ -329,7 +331,7 @@ import {
   afterAll,
   test,
   assert,
-} from "edge://assert/mod.ts";
+} from "thunder:testing";
 
 let db: Database;
 
@@ -383,7 +385,7 @@ A biblioteca oferece quatro mecanismos de mock:
 Cria uma função com rastreamento de chamadas:
 
 ```ts
-import { mockFn, assertEquals, assertSpyCalls } from "edge://assert/mod.ts";
+import { mockFn, assertEquals, assertSpyCalls } from "thunder:testing";
 
 // Mock com implementação
 const add = mockFn((a: number, b: number) => a + b);
@@ -472,7 +474,7 @@ assertEquals(failing.calls[0].error instanceof Error, true);
 Substitui um método de um objeto por um spy que rastreia chamadas e delega ao método original:
 
 ```ts
-import { spyOn, assertEquals } from "edge://assert/mod.ts";
+import { spyOn, assertEquals } from "thunder:testing";
 
 const spy = spyOn(console, "log");
 
@@ -490,7 +492,7 @@ O spy herda todas as propriedades de `Mock` (`calls`, `mockClear`, `mockImplemen
 - `restore()` — restaura o método original no objeto
 
 ```ts
-import { spyOn, assertEquals, assertSpyCalls } from "edge://assert/mod.ts";
+import { spyOn, assertEquals, assertSpyCalls } from "thunder:testing";
 
 const obj = {
   greet(name: string) {
@@ -521,7 +523,7 @@ import {
   mockFn,
   assertSpyCalls,
   assertSpyCall,
-} from "edge://assert/mod.ts";
+} from "thunder:testing";
 
 const fn = mockFn((a: number, b: number) => a + b);
 fn(1, 2);
@@ -551,7 +553,7 @@ O objeto `expected` de `assertSpyCall` é parcial — você pode verificar apena
 O jeito mais simples de mockar `fetch`. Mapeia URLs exatas para respostas:
 
 ```ts
-import { mockFetch, assertEquals } from "edge://assert/mod.ts";
+import { mockFetch, assertEquals } from "thunder:testing";
 
 const mock = mockFetch({
   "https://api.example.com/users": {
@@ -628,7 +630,7 @@ try {
 Para cenários mais complexos, use um handler function que recebe o `Request` e retorna um `Response`:
 
 ```ts
-import { mockFetchHandler, assertEquals } from "edge://assert/mod.ts";
+import { mockFetchHandler, assertEquals } from "thunder:testing";
 
 const mock = mockFetchHandler((request) => {
   const url = new URL(request.url);
@@ -680,7 +682,7 @@ const mock = mockFetchHandler(async (request) => {
 `mockTime()` substitui `setTimeout`, `clearTimeout`, `setInterval` e `clearInterval` por versões controladas:
 
 ```ts
-import { mockTime, assert, assertEquals } from "edge://assert/mod.ts";
+import { mockTime, assert, assertEquals } from "thunder:testing";
 
 const clock = mockTime();
 
@@ -743,7 +745,7 @@ import {
   mockTime,
   assert,
   type MockClock,
-} from "edge://assert/mod.ts";
+} from "thunder:testing";
 
 let clock: MockClock;
 
@@ -775,7 +777,7 @@ await runSuite("timers", [
 `assertSnapshot` salva o valor serializado em um arquivo `.snap` e compara em execuções futuras:
 
 ```ts
-import { assertSnapshot } from "edge://assert/mod.ts";
+import { assertSnapshot } from "thunder:testing";
 
 const user = { id: 1, name: "Celso", role: "admin" };
 assertSnapshot(user);
@@ -801,7 +803,7 @@ type SnapshotOptions = {
 ### Exemplos
 
 ```ts
-import { runSuite, test, assertSnapshot } from "edge://assert/mod.ts";
+import { runSuite, test, assertSnapshot } from "thunder:testing";
 
 await runSuite("snapshot", [
   test("user schema", () => {
@@ -839,7 +841,7 @@ Snapshot file: /path/__snapshots__/test-file.snap
 Testes marcados com `{ concurrent: true }` rodam em paralelo via `Promise.all`:
 
 ```ts
-import { runSuite, test, assert } from "edge://assert/mod.ts";
+import { runSuite, test, assert } from "thunder:testing";
 
 await runSuite("concurrent", [
   test("request A", async () => {
@@ -868,7 +870,7 @@ Testes sequenciais executam primeiro na ordem declarada, seguidos pelos concorre
 Após executar suites, você pode consultar estatísticas acumuladas:
 
 ```ts
-import { getTestRunnerStats } from "edge://assert/mod.ts";
+import { getTestRunnerStats } from "thunder:testing";
 
 const stats = getTestRunnerStats();
 console.log(stats);
@@ -908,7 +910,7 @@ import {
   mockFetch,
   mockTime,
   assertSnapshot,
-} from "edge://assert/mod.ts";
+} from "thunder:testing";
 
 let clock;
 
@@ -986,7 +988,7 @@ await runSuite("complete example", [
 Use `testEach(rows)`.
 
 ```ts
-import { runSuite, testEach, assertEquals } from "edge://assert/mod.ts";
+import { runSuite, testEach, assertEquals } from "thunder:testing";
 
 await runSuite("sum", [
   ...testEach([
@@ -1003,7 +1005,7 @@ await runSuite("sum", [
 Use `testIf(condition)`.
 
 ```ts
-import { runSuite, testIf, assert } from "edge://assert/mod.ts";
+import { runSuite, testIf, assert } from "thunder:testing";
 
 const featureEnabled = typeof Deno === "object";
 
@@ -1023,7 +1025,7 @@ If the condition is false, the test is skipped.
 `retry` retries flaky tests before final failure.
 
 ```ts
-import { runSuite, test } from "edge://assert/mod.ts";
+import { runSuite, test } from "thunder:testing";
 
 let attempt = 0;
 

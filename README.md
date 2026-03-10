@@ -15,7 +15,7 @@ This repository implements a runtime for edge/serverless workloads with:
 - code packaging in ESZIP format
 - dynamic deployment through an internal HTTP API
 - development mode with watch + hot update
-- JS/TS test support through the `edge://assert/*` library
+- JS/TS test support through the `thunder:testing` library
 - observability (metrics, health, logs)
 
 The project is organized as a Rust workspace with specialized crates for runtime, function orchestration, HTTP serving, and CLI tooling.

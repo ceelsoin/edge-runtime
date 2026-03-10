@@ -9,9 +9,14 @@ const ASSERT_MOCK_SPY_TS: &str = include_str!("../../../runtime-core/src/assert/
 const ASSERT_MOCK_FETCH_TS: &str = include_str!("../../../runtime-core/src/assert/mock/fetch.ts");
 const ASSERT_MOCK_TIME_TS: &str = include_str!("../../../runtime-core/src/assert/mock/time.ts");
 
+const THUNDER_TESTING_ALIAS: &str = "thunder:testing";
+const EDGE_ASSERT_MOD_SPECIFIER: &str = "edge://assert/mod.ts";
+
 pub fn rewrite_edge_assert_imports(content: Vec<u8>) -> Vec<u8> {
-    // Keep edge://assert specifiers unchanged so relative imports remain resolvable.
-    content
+    // Map local CLI shorthand to the embedded edge assert module.
+    String::from_utf8_lossy(&content)
+        .replace(THUNDER_TESTING_ALIAS, EDGE_ASSERT_MOD_SPECIFIER)
+        .into_bytes()
 }
 
 pub fn load_module_bytes(
@@ -77,6 +82,16 @@ mod tests {
         let out = String::from_utf8(output).expect("utf8");
 
         assert!(out.contains("edge://assert/mod.ts"));
+    }
+
+    #[test]
+    fn rewrites_thunder_testing_alias() {
+        let input = b"import { assertEquals } from 'thunder:testing';\n".to_vec();
+        let output = rewrite_edge_assert_imports(input);
+        let out = String::from_utf8(output).expect("utf8");
+
+        assert!(out.contains("edge://assert/mod.ts"));
+        assert!(!out.contains("thunder:testing"));
     }
 
     #[test]

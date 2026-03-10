@@ -20,6 +20,10 @@ pub struct FunctionManifest {
     pub name: String,
     pub entrypoint: String,
     #[serde(default)]
+    pub flavor: Option<ManifestFlavor>,
+    #[serde(default)]
+    pub routes: Vec<ManifestRoute>,
+    #[serde(default)]
     pub env: Option<ManifestEnv>,
     pub network: ManifestNetwork,
     #[serde(default)]
@@ -30,6 +34,33 @@ pub struct FunctionManifest {
     pub observability: Option<ManifestObservability>,
     #[serde(default)]
     pub profiles: HashMap<String, ManifestProfile>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ManifestFlavor {
+    Single,
+    RoutedApp,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestRoute {
+    pub kind: ManifestRouteKind,
+    pub path: String,
+    #[serde(default)]
+    pub methods: Vec<String>,
+    #[serde(default)]
+    pub entrypoint: Option<String>,
+    #[serde(default)]
+    pub asset_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum ManifestRouteKind {
+    Function,
+    Asset,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -162,16 +193,15 @@ static DENY_RULES: Lazy<Vec<DenyRule>> = Lazy::new(|| {
         .collect()
 });
 
-static MANIFEST_VALIDATOR: Lazy<Validator> = Lazy::new(|| {
+static MANIFEST_V1_VALIDATOR: Lazy<Validator> = Lazy::new(|| {
     let common_schema: Value =
         serde_json::from_str(include_str!("../../../schemas/base/common.schema.json"))
             .expect("valid common schema JSON");
     let network_schema: Value =
         serde_json::from_str(include_str!("../../../schemas/base/network.schema.json"))
             .expect("valid network schema JSON");
-    let manifest_schema: Value = serde_json::from_str(include_str!(
-        "../../../schemas/function-manifest.v1.schema.json"
-    ))
+    let manifest_schema: Value =
+        serde_json::from_str(include_str!("../../../schemas/function-manifest.v1.schema.json"))
     .expect("valid manifest schema JSON");
 
     let mut options = jsonschema::options().with_draft(Draft::Draft202012);
@@ -186,7 +216,33 @@ static MANIFEST_VALIDATOR: Lazy<Validator> = Lazy::new(|| {
 
     options
         .build(&manifest_schema)
-        .expect("valid manifest validator")
+        .expect("valid v1 manifest validator")
+});
+
+static MANIFEST_V2_VALIDATOR: Lazy<Validator> = Lazy::new(|| {
+    let common_schema: Value =
+        serde_json::from_str(include_str!("../../../schemas/base/common.schema.json"))
+            .expect("valid common schema JSON");
+    let network_schema: Value =
+        serde_json::from_str(include_str!("../../../schemas/base/network.schema.json"))
+            .expect("valid network schema JSON");
+    let manifest_schema: Value =
+        serde_json::from_str(include_str!("../../../schemas/function-manifest.v2.schema.json"))
+            .expect("valid manifest schema JSON");
+
+    let mut options = jsonschema::options().with_draft(Draft::Draft202012);
+    options = options.with_resource(
+        COMMON_SCHEMA_URI,
+        Resource::from_contents(common_schema).expect("valid common schema resource"),
+    );
+    options = options.with_resource(
+        NETWORK_SCHEMA_URI,
+        Resource::from_contents(network_schema).expect("valid network schema resource"),
+    );
+
+    options
+        .build(&manifest_schema)
+        .expect("valid v2 manifest validator")
 });
 
 static ROUTING_MANIFEST_VALIDATOR: Lazy<Validator> = Lazy::new(|| {
@@ -213,7 +269,19 @@ pub fn validate_manifest_json(manifest_json: &str) -> Result<FunctionManifest, E
     let manifest_value: Value = serde_json::from_str(manifest_json)
         .map_err(|e| anyhow::anyhow!("manifest is not valid JSON: {e}"))?;
 
-    let schema_errors: Vec<String> = MANIFEST_VALIDATOR
+    let manifest_version = extract_manifest_version(&manifest_value)?;
+    let manifest_validator = match manifest_version {
+        1 => &*MANIFEST_V1_VALIDATOR,
+        2 => &*MANIFEST_V2_VALIDATOR,
+        other => {
+            return Err(anyhow::anyhow!(
+                "manifestVersion {} is not supported (supported: 1, 2)",
+                other
+            ));
+        }
+    };
+
+    let schema_errors: Vec<String> = manifest_validator
         .iter_errors(&manifest_value)
         .map(|err| err.to_string())
         .collect();
@@ -230,6 +298,14 @@ pub fn validate_manifest_json(manifest_json: &str) -> Result<FunctionManifest, E
     validate_manifest_semantics(&manifest)?;
 
     Ok(manifest)
+}
+
+fn extract_manifest_version(manifest_value: &Value) -> Result<u32, Error> {
+    manifest_value
+        .get("manifestVersion")
+        .and_then(Value::as_u64)
+        .map(|value| value as u32)
+        .ok_or_else(|| anyhow::anyhow!("manifestVersion must be an integer"))
 }
 
 pub fn parse_validate_and_resolve_manifest(
@@ -375,6 +451,51 @@ fn dedupe_preserve_order(values: &[String]) -> Vec<String> {
 fn validate_manifest_semantics(manifest: &FunctionManifest) -> Result<(), Error> {
     validate_network_targets(&manifest.network.allow)?;
 
+    match manifest.manifest_version {
+        1 => {
+            if manifest.flavor.is_some() {
+                return Err(anyhow::anyhow!(
+                    "manifestVersion 1 does not support field 'flavor'"
+                ));
+            }
+            if !manifest.routes.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "manifestVersion 1 does not support field 'routes'"
+                ));
+            }
+        }
+        2 => {
+            let flavor = manifest.flavor.ok_or_else(|| {
+                anyhow::anyhow!("manifestVersion 2 requires field 'flavor'")
+            })?;
+
+            match flavor {
+                ManifestFlavor::Single => {
+                    if !manifest.routes.is_empty() {
+                        return Err(anyhow::anyhow!(
+                            "manifest flavor 'single' must not define routes"
+                        ));
+                    }
+                }
+                ManifestFlavor::RoutedApp => {
+                    if manifest.routes.is_empty() {
+                        return Err(anyhow::anyhow!(
+                            "manifest flavor 'routed-app' requires at least one route"
+                        ));
+                    }
+                }
+            }
+
+            validate_manifest_routes(&manifest.routes)?;
+        }
+        other => {
+            return Err(anyhow::anyhow!(
+                "manifestVersion {} is not supported (supported: 1, 2)",
+                other
+            ));
+        }
+    }
+
     for (profile_name, profile) in &manifest.profiles {
         if let Some(profile_network) = &profile.network {
             if let Some(allow) = &profile_network.allow {
@@ -400,6 +521,105 @@ fn validate_routing_manifest_semantics(manifest: &RoutingManifest) -> Result<(),
             return Err(anyhow::anyhow!(
                 "routing manifest has duplicate host+path entry: {} {}",
                 route.host,
+                route.path
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_manifest_routes(routes: &[ManifestRoute]) -> Result<(), Error> {
+    let mut seen = std::collections::HashSet::new();
+    for route in routes {
+        if !route.path.starts_with('/') {
+            return Err(anyhow::anyhow!(
+                "manifest route path '{}' must start with '/'",
+                route.path
+            ));
+        }
+
+        let mut normalized_methods = Vec::new();
+        for method in &route.methods {
+            let normalized = method.to_ascii_uppercase();
+            let is_valid = matches!(
+                normalized.as_str(),
+                "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS"
+            );
+            if !is_valid {
+                return Err(anyhow::anyhow!(
+                    "manifest route '{}' has unsupported HTTP method '{}'",
+                    route.path,
+                    method
+                ));
+            }
+            if !normalized_methods.contains(&normalized) {
+                normalized_methods.push(normalized);
+            }
+        }
+        normalized_methods.sort();
+
+        match route.kind {
+            ManifestRouteKind::Function => {
+                if route
+                    .entrypoint
+                    .as_deref()
+                    .map(|value| value.trim().is_empty())
+                    .unwrap_or(true)
+                {
+                    return Err(anyhow::anyhow!(
+                        "function route '{}' requires non-empty entrypoint",
+                        route.path
+                    ));
+                }
+                if route.asset_dir.is_some() {
+                    return Err(anyhow::anyhow!(
+                        "function route '{}' cannot define assetDir",
+                        route.path
+                    ));
+                }
+            }
+            ManifestRouteKind::Asset => {
+                if route
+                    .asset_dir
+                    .as_deref()
+                    .map(|value| value.trim().is_empty())
+                    .unwrap_or(true)
+                {
+                    return Err(anyhow::anyhow!(
+                        "asset route '{}' requires non-empty assetDir",
+                        route.path
+                    ));
+                }
+                if route.entrypoint.is_some() {
+                    return Err(anyhow::anyhow!(
+                        "asset route '{}' cannot define entrypoint",
+                        route.path
+                    ));
+                }
+                if !route.methods.is_empty()
+                    && route
+                        .methods
+                        .iter()
+                        .any(|method| !matches!(method.to_ascii_uppercase().as_str(), "GET" | "HEAD"))
+                {
+                    return Err(anyhow::anyhow!(
+                        "asset route '{}' only supports GET/HEAD methods",
+                        route.path
+                    ));
+                }
+            }
+        }
+
+        let methods_key = if normalized_methods.is_empty() {
+            "*".to_string()
+        } else {
+            normalized_methods.join(",")
+        };
+        let dedupe_key = (route.path.clone(), methods_key, route.kind);
+        if !seen.insert(dedupe_key) {
+            return Err(anyhow::anyhow!(
+                "manifest has duplicate route definition for path '{}'",
                 route.path
             ));
         }
@@ -526,6 +746,104 @@ mod tests {
 
         let manifest = validate_manifest_json(json).expect("manifest should validate");
         assert_eq!(manifest.name, "hello");
+    }
+
+    #[test]
+    fn validates_minimal_manifest_v2_single() {
+        let json = r#"{
+                    "$schema": "https://thunder.dev/schemas/function-manifest.v2.schema.json",
+                    "manifestVersion": 2,
+                    "name": "hello",
+                    "entrypoint": "./index.ts",
+                    "flavor": "single",
+                    "network": {
+                        "mode": "allowlist",
+                        "allow": ["api.example.com:443"]
+                    }
+                }"#;
+
+        let manifest = validate_manifest_json(json).expect("manifest should validate");
+        assert_eq!(manifest.manifest_version, 2);
+        assert_eq!(manifest.flavor, Some(ManifestFlavor::Single));
+        assert!(manifest.routes.is_empty());
+    }
+
+    #[test]
+    fn validates_manifest_v2_routed_app_with_function_and_asset_routes() {
+        let json = r#"{
+                    "manifestVersion": 2,
+                    "name": "hello-routed",
+                    "entrypoint": "./fallback.ts",
+                    "flavor": "routed-app",
+                    "network": {
+                        "mode": "allowlist",
+                        "allow": ["api.example.com:443"]
+                    },
+                    "routes": [
+                        {
+                            "kind": "function",
+                            "path": "/api/users/:id",
+                            "methods": ["GET", "POST"],
+                            "entrypoint": "./functions/users.ts"
+                        },
+                        {
+                            "kind": "asset",
+                            "path": "/assets/*",
+                            "assetDir": "./public"
+                        }
+                    ]
+                }"#;
+
+        let manifest = validate_manifest_json(json).expect("manifest should validate");
+        assert_eq!(manifest.flavor, Some(ManifestFlavor::RoutedApp));
+        assert_eq!(manifest.routes.len(), 2);
+    }
+
+    #[test]
+    fn rejects_manifest_v2_single_with_routes() {
+        let json = r#"{
+                    "manifestVersion": 2,
+                    "name": "hello",
+                    "entrypoint": "./index.ts",
+                    "flavor": "single",
+                    "network": {
+                        "mode": "allowlist",
+                        "allow": ["api.example.com:443"]
+                    },
+                    "routes": [
+                        {
+                            "kind": "function",
+                            "path": "/api/hello",
+                            "entrypoint": "./functions/hello.ts"
+                        }
+                    ]
+                }"#;
+
+        let err = validate_manifest_json(json).expect_err("single flavor with routes must fail");
+        assert!(err
+            .to_string()
+            .contains("flavor 'single' must not define routes")
+            || err.to_string().contains("schema validation failed"));
+    }
+
+    #[test]
+    fn rejects_manifest_v2_routed_app_without_routes() {
+        let json = r#"{
+                    "manifestVersion": 2,
+                    "name": "hello",
+                    "entrypoint": "./index.ts",
+                    "flavor": "routed-app",
+                    "network": {
+                        "mode": "allowlist",
+                        "allow": ["api.example.com:443"]
+                    }
+                }"#;
+
+        let err = validate_manifest_json(json).expect_err("routed-app without routes must fail");
+        assert!(err
+            .to_string()
+            .contains("flavor 'routed-app' requires at least one route")
+            || err.to_string().contains("schema validation failed"));
     }
 
     #[test]
