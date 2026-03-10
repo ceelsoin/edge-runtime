@@ -1,4 +1,4 @@
-import { runSuite, assert, assertEquals } from "edge://assert/mod.ts";
+import { runSuite, assert, assertEquals } from "thunder:testing";
 
 function parseHostPort(input: string): { host: string; port: number } {
   const url = new URL(input);

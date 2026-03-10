@@ -1,4 +1,4 @@
-import { runSuite, assert } from "edge://assert/mod.ts";
+import { runSuite, assert } from "thunder:testing";
 
 await runSuite("web-apis-partial-and-none", [
   {

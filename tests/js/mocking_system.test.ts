@@ -9,7 +9,7 @@ import {
   mockTime,
   assertSpyCalls,
   assertSpyCall,
-} from "edge://assert/mod.ts";
+} from "thunder:testing";
 
 await runSuite("mocking-system", [
   {

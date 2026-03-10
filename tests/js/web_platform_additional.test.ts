@@ -1,4 +1,4 @@
-import { runSuite, assert, assertEquals } from "edge://assert/mod.ts";
+import { runSuite, assert, assertEquals } from "thunder:testing";
 
 await runSuite("web-platform-additional", [
   {

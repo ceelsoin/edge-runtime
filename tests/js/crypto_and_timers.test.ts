@@ -1,4 +1,4 @@
-import { runSuite, assert, assertEquals, assertExists, assertRejects } from "edge://assert/mod.ts";
+import { runSuite, assert, assertEquals, assertExists, assertRejects } from "thunder:testing";
 
 await runSuite("crypto-and-timers", [
   {

@@ -12,7 +12,7 @@ import {
   afterAll,
   getTestRunnerStats,
   assertSnapshot,
-} from "edge://assert/mod.ts";
+} from "thunder:testing";
 
 await runSuite("runner-advanced-features", [
   {

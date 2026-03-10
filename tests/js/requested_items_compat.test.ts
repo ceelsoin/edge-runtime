@@ -3,7 +3,7 @@ import {
   assert,
   assertEquals,
   assertExists,
-} from "edge://assert/mod.ts";
+} from "thunder:testing";
 
 await runSuite("requested-items-compat", [
   {

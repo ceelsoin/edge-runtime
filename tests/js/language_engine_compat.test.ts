@@ -1,4 +1,4 @@
-import { runSuite, assert, assertEquals, assertThrows } from "edge://assert/mod.ts";
+import { runSuite, assert, assertEquals, assertThrows } from "thunder:testing";
 
 await runSuite("language-engine-compat", [
   {

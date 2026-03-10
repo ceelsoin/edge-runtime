@@ -1,4 +1,4 @@
-import { runSuite, assert, assertEquals, assertExists } from "edge://assert/mod.ts";
+import { runSuite, assert, assertEquals, assertExists } from "thunder:testing";
 
 await runSuite("web-apis-full", [
   {
