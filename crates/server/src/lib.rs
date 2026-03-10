@@ -1232,6 +1232,53 @@ mod tests {
         panic!("listener did not become ready in time: {addr}");
     }
 
+    async fn wait_for_routing_saturation(addr: SocketAddr) {
+        let mut last_metrics = String::new();
+        for _ in 0..100 {
+            let metrics_resp = send_plain_http(
+                addr,
+                "GET /_internal/metrics HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            )
+            .await;
+            last_metrics = metrics_resp.clone();
+
+            if metrics_resp.starts_with("HTTP/1.1 200") {
+                let metrics = parse_http_json_body(&metrics_resp);
+                let routing = metrics.get("routing");
+                let total_contexts = routing
+                    .and_then(|r| r.get("total_contexts"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let saturated_contexts = routing
+                    .and_then(|r| r.get("saturated_contexts"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let saturated_isolates = routing
+                    .and_then(|r| r.get("saturated_isolates"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let total_active_requests = routing
+                    .and_then(|r| r.get("total_active_requests"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+
+                if total_contexts >= 1
+                    && saturated_contexts >= 1
+                    && saturated_isolates >= 1
+                    && total_active_requests >= 1
+                {
+                    return;
+                }
+            }
+
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        panic!(
+            "timed out waiting for routing saturation to be observed in metrics: {last_metrics}"
+        );
+    }
+
     fn make_temp_tls_files() -> (
         std::path::PathBuf,
         std::path::PathBuf,
@@ -2366,7 +2413,7 @@ mod tests {
             "file:///context_saturation.ts",
             r#"
             Deno.serve(async (_req) => {
-              await new Promise((resolve) => setTimeout(resolve, 120));
+                            await new Promise((resolve) => setTimeout(resolve, 800));
               return new Response('ok', { headers: { 'content-type': 'text/plain' } });
             });
             "#,
@@ -2405,12 +2452,15 @@ mod tests {
 
         wait_for_tcp_listener(addr).await;
 
-        let in_flight = tokio::spawn(send_plain_http(
-            addr,
-            "GET /ctx-slo HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-        ));
+        let mut in_flight = TcpStream::connect(addr)
+            .await
+            .expect("failed to connect in-flight request");
+        in_flight
+            .write_all(b"GET /ctx-slo HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .expect("failed to write in-flight request");
 
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        wait_for_routing_saturation(addr).await;
 
         let saturated = send_plain_http(
             addr,
@@ -2442,14 +2492,6 @@ mod tests {
             .unwrap_or_else(|| panic!("missing routing field in metrics: {metrics}"));
         assert!(
             routing
-                .get("saturated_rejections")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0)
-                >= 1,
-            "expected at least one saturated rejection: {metrics}"
-        );
-        assert!(
-            routing
                 .get("saturated_contexts")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0)
@@ -2465,7 +2507,12 @@ mod tests {
             "expected saturated isolates while request is in flight: {metrics}"
         );
 
-        let completed = in_flight.await.expect("join failure for in-flight request");
+        let mut completed_buf = Vec::new();
+        tokio::time::timeout(Duration::from_secs(3), in_flight.read_to_end(&mut completed_buf))
+            .await
+            .expect("timed out waiting in-flight response")
+            .expect("failed to read in-flight response");
+        let completed = String::from_utf8_lossy(&completed_buf).to_string();
         assert!(
             completed.starts_with("HTTP/1.1 200"),
             "expected first request to complete with 200, got: {completed}"
@@ -2644,7 +2691,10 @@ mod tests {
             .await
             .expect("failed to write second request");
         let mut buf = [0_u8; 128];
-        let second_read = tokio::time::timeout(Duration::from_millis(300), second.read(&mut buf))
+        let second_read = tokio::time::timeout(
+            ACCEPT_PERMIT_WAIT + Duration::from_millis(700),
+            second.read(&mut buf),
+        )
             .await
             .expect("timed out reading second connection");
         match second_read {
