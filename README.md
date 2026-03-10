@@ -4,7 +4,7 @@
 
 This repository has been **moved to a new location**.
 
-👉 New repository: https://github.com/thunder-edge/new-runtime
+👉 New repository: https://github.com/thunder-edge/runtime
 
 Please update your bookmarks, git remotes, and references.
 
